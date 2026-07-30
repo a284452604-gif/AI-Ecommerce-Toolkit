@@ -25,5 +25,8 @@ class SignalBus(QObject):
     app_ready = Signal()                    # 应用初始化完成
     app_closing = Signal()                  # 应用即将关闭
 
+    # 功能联动
+    title_optimize_request = Signal(str)    # 参数: title — 请求对指定标题进行 AI 优化
+
     # 状态栏消息
     status_message = Signal(str)            # 参数: message — 向状态栏发送消息

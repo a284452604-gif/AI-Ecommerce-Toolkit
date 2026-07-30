@@ -20,7 +20,7 @@ class TestConfigManager:
         config = ConfigManager(temp_app_dir)
 
         assert config.get("app.name") == "AI电商工具箱"
-        assert config.get("app.version") == "0.2.0"
+        assert config.get("app.version") == "0.3.0"
         assert config.get("window.width") == 1200
         assert config.get("window.height") == 800
 
@@ -69,7 +69,7 @@ class TestConfigManager:
 
         config.reset_to_default()
 
-        assert config.get("ai_service.provider") == ""
+        assert config.get("ai_service.provider") == "deepseek"
         assert config.get("window.width") == 1200
 
     def test_user_config_merge(self, temp_app_dir):
@@ -96,7 +96,7 @@ class TestConfigManager:
         assert config.get("window.width") == 1600
 
         # 默认配置保留的值（深度合并）
-        assert config.get("ai_service.model") == ""
+        assert config.get("ai_service.model") == "deepseek-chat"
         assert config.get("ai_service.timeout") == 30
         assert config.get("window.height") == 800
 

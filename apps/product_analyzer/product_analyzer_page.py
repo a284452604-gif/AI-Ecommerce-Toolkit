@@ -69,6 +69,7 @@ class ProductAnalyzerPage(BasePage):
         self._shop_label: QLabel | None = None
         self._desc_label: QLabel | None = None
         self._fetch_time_label: QLabel | None = None
+        self._optimize_title_btn: QPushButton | None = None
         self._error_label: QLabel | None = None
         self._result_stack: QWidget | None = None
         self._empty_result: QWidget | None = None
@@ -296,7 +297,20 @@ class ProductAnalyzerPage(BasePage):
 
         result_content_layout.addWidget(product_group)
 
-        # 3) 错误信息
+        # 3) AI优化标题按钮
+        optimize_layout = QHBoxLayout()
+        optimize_layout.addStretch()
+        self._optimize_title_btn = QPushButton("✨ AI 优化标题")
+        self._optimize_title_btn.setObjectName("PrimaryButton")
+        self._optimize_title_btn.setMinimumHeight(36)
+        self._optimize_title_btn.setToolTip("将当前商品标题发送到 AI 标题优化页面")
+        self._optimize_title_btn.clicked.connect(self._on_optimize_title)
+        self._optimize_title_btn.setVisible(False)
+        optimize_layout.addWidget(self._optimize_title_btn)
+        optimize_layout.addStretch()
+        result_content_layout.addLayout(optimize_layout)
+
+        # 4) 错误信息
         self._error_label = QLabel()
         self._error_label.setVisible(False)
         self._error_label.setWordWrap(True)
@@ -437,6 +451,13 @@ class ProductAnalyzerPage(BasePage):
         self._progress.setVisible(False)
         self._set_ui_enabled(True)
 
+    def _on_optimize_title(self):
+        """将当前商品标题发送到 AI 标题优化页面"""
+        if self._current_result and self._current_result.get("title"):
+            self._context.signals.title_optimize_request.emit(
+                self._current_result["title"]
+            )
+
     def _set_ui_enabled(self, enabled: bool):
         """设置 UI 控件的启用状态"""
         if self._analyze_btn:
@@ -465,12 +486,17 @@ class ProductAnalyzerPage(BasePage):
 
         # 商品信息
         if result.get("success"):
-            self._set_label(self._title_label, result.get("title", "-"))
+            title = result.get("title", "-")
+            self._set_label(self._title_label, title)
             self._set_label(self._price_label, result.get("price", "-"))
             self._set_label(self._shop_label, result.get("shop_name", "-"))
             self._set_label(self._desc_label, result.get("description", "-"))
             fetch_time = result.get("fetch_time", 0)
             self._set_label(self._fetch_time_label, f"{fetch_time:.2f} 秒")
+            # 有标题时显示 AI 优化按钮
+            if self._optimize_title_btn:
+                has_title = title and title != "-" and title.strip()
+                self._optimize_title_btn.setVisible(has_title)
         elif result.get("error_message"):
             # 解析失败但有平台信息
             self._set_label(self._title_label, "-")
@@ -486,6 +512,8 @@ class ProductAnalyzerPage(BasePage):
         """显示空结果提示"""
         self._empty_result.setVisible(True)
         self._result_stack.setVisible(False)
+        if self._optimize_title_btn:
+            self._optimize_title_btn.setVisible(False)
         self._current_result = None
 
     @staticmethod

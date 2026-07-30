@@ -1,5 +1,24 @@
 # 变更日志
 
+## [0.3.0] - 2026-07-30
+
+### 新增
+- AI 标题优化模块（apps/title_optimizer）
+- AI 服务层：BaseAIService 抽象基类 + DeepSeek 适配器（OpenAI SDK 兼容）
+- AI 服务管理器：工厂模式创建 AI 服务实例
+- 标题优化器：三种优化风格（搜索优化、促销转化、品牌调性）
+- 标题优化页面：标题输入、风格选择、单次/批量优化、结果对比展示
+- QThread 异步 AI 调用：避免 UI 阻塞
+- 优化结果展示卡片：前后对比 + SEO 关键词 + 优化理由
+- 商品分析页面联动：一键将商品标题发送到 AI 优化
+- SignalBus 新增 title_optimize_request 信号实现跨页面通信
+
+### 变更
+- 版本号升级至 0.3.0
+- requirements.txt 新增 openai 依赖（DeepSeek 兼容 OpenAI SDK）
+- 默认配置新增 DeepSeek API 默认值
+- 首页"AI标题优化"卡片状态更新为"可用"
+
 ## [0.2.0] - 2026-07-30
 
 ### 新增
