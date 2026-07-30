@@ -1,1 +1,4 @@
-"""AI电商工具箱 - 数据库模块（V0.1 占位）"""
+"""AI电商工具箱 - 数据库模块"""
+from database.db_manager import DatabaseManager
+
+__all__ = ["DatabaseManager"]

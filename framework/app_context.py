@@ -3,6 +3,7 @@
 from framework.config_manager import ConfigManager
 from framework.log_manager import LogManager
 from framework.signal_bus import SignalBus
+from database.db_manager import DatabaseManager
 
 
 class AppContext:
@@ -33,6 +34,7 @@ class AppContext:
             self._config_manager = None
             self._log_manager = None
             self._signal_bus = None
+            self._db_manager = None
 
     def initialize(self, app_dir: str):
         """在应用启动时调用，初始化所有 Manager
@@ -47,6 +49,8 @@ class AppContext:
         self._config_manager = ConfigManager(app_dir)
         self._log_manager = LogManager(self._config_manager)
         self._signal_bus = SignalBus()
+        self._db_manager = DatabaseManager.get_instance()
+        self._db_manager.initialize(app_dir)
         self._initialized = True
 
     @property
@@ -74,3 +78,10 @@ class AppContext:
     def app_dir(self) -> str:
         """获取应用根目录"""
         return self._app_dir
+
+    @property
+    def db(self) -> DatabaseManager:
+        """获取数据库管理器"""
+        if self._db_manager is None:
+            raise RuntimeError("AppContext 尚未初始化，请先调用 initialize()")
+        return self._db_manager

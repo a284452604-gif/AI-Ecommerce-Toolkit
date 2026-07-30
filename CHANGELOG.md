@@ -1,5 +1,44 @@
 # 变更日志
 
+## [1.0.0] - 2026-07-30
+
+### 新增
+- **SQLite 数据持久化**（database/db_manager.py）
+  - DatabaseManager 单例，线程安全
+  - 分析记录表 (analysis_history)：平台、商品ID、标题、价格、店铺等
+  - 优化记录表 (optimization_history)：原标题、优化标题、风格、SEO关键词等
+  - WAL 模式、索引优化、CRUD 完整接口
+- **数据导出模块**（apps/data_export）
+  - 支持导出分析记录和优化记录
+  - Excel (.xlsx) 格式导出（openpyxl，带样式）
+  - CSV (.csv) 格式导出（UTF-8 BOM 编码）
+  - 日期范围、平台/风格筛选
+  - 数据预览表格
+- **批量链接分析**（apps/product_analyzer/batch_scrape_worker.py）
+  - BatchScrapeWorker：多 URL 队列式异步分析
+  - 进度追踪、逐个结果实时更新
+  - 批量结果汇总表格
+- **多标题批量优化**（apps/title_optimizer/multi_title_worker.py）
+  - MultiTitleOptimizeWorker：多标题队列式 AI 优化
+  - 进度追踪、Token 用量统计
+  - 批量结果汇总表格
+- **历史记录管理页面**（apps/history）
+  - 统一管理分析/优化历史
+  - 标签页切换（分析记录 / 优化记录）
+  - 搜索、平台/风格筛选
+  - 批量删除、清空全部
+- **首页仪表盘升级**
+  - 实时统计数据条：分析次数、优化次数、今日分析、今日优化
+  - 功能卡片更新：历史记录、数据导出 → "可用"
+
+### 变更
+- 版本号升级至 1.0.0
+- AppContext 新增 `db` 属性，自动管理 DatabaseManager 生命周期
+- ProductAnalyzerPage：分析结果自动保存到 SQLite，on_show 时从 DB 加载历史
+- TitleOptimizerPage：优化结果自动保存到 SQLite，on_show 时从 DB 加载历史
+- requirements.txt 新增 openpyxl>=3.1.0
+- 导航栏新增「历史记录」「数据导出」两个入口
+
 ## [0.3.0] - 2026-07-30
 
 ### 新增

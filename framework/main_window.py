@@ -117,11 +117,15 @@ class MainWindow(QMainWindow):
         from apps.about.about_page import AboutPage
         from apps.product_analyzer.product_analyzer_page import ProductAnalyzerPage
         from apps.title_optimizer.title_optimizer_page import TitleOptimizerPage
+        from apps.data_export.data_export_page import DataExportPage
+        from apps.history.history_page import HistoryPage
 
         pages: list[BasePage] = [
             HomePage("home", "首页", "home"),
             ProductAnalyzerPage("product_analyzer", "商品链接分析", "analyze"),
             TitleOptimizerPage("title_optimizer", "AI标题优化", "sparkle"),
+            HistoryPage("history", "历史记录", "history"),
+            DataExportPage("data_export", "数据导出", "export"),
             SettingsPage("settings", "系统设置", "settings"),
             AboutPage("about", "关于", "about"),
         ]

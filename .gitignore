@@ -33,3 +33,6 @@ config/app_config.json
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Database (runtime data)
+data/

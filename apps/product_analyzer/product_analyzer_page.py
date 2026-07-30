@@ -16,16 +16,18 @@ from PySide6.QtWidgets import (
     QTextEdit, QPushButton, QSplitter, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView,
     QGroupBox, QGridLayout, QSizePolicy, QAbstractItemView,
-    QMessageBox, QProgressBar,
+    QMessageBox, QProgressBar, QCheckBox,
 )
 from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QFont, QColor
 
 from framework.base_page import BasePage
 from framework.app_context import AppContext
+from database.db_manager import DatabaseManager
 from apps.product_analyzer.link_parser import ParsedLink, Platform
 from apps.product_analyzer.product_scraper import ProductInfo
 from apps.product_analyzer.scrape_worker import ScrapeWorker
+from apps.product_analyzer.batch_scrape_worker import BatchScrapeWorker
 
 
 class ProductAnalyzerPage(BasePage):
@@ -51,11 +53,14 @@ class ProductAnalyzerPage(BasePage):
         self._history: list[dict] = []         # 分析历史 [{time, url, parsed, product}]
         self._current_result: dict | None = None  # 当前分析结果
         self._worker: ScrapeWorker | None = None
+        self._batch_worker: BatchScrapeWorker | None = None
+        self._batch_results: list[dict] = []
 
         # UI 控件引用
         self._url_input: QTextEdit | None = None
         self._analyze_btn: QPushButton | None = None
         self._clear_btn: QPushButton | None = None
+        self._batch_check: QCheckBox | None = None
         self._progress: QProgressBar | None = None
         self._status_label: QLabel | None = None
         self._history_table: QTableWidget | None = None
@@ -73,6 +78,8 @@ class ProductAnalyzerPage(BasePage):
         self._error_label: QLabel | None = None
         self._result_stack: QWidget | None = None
         self._empty_result: QWidget | None = None
+        self._batch_table: QTableWidget | None = None
+        self._batch_summary_label: QLabel | None = None
 
     def _setup_ui(self):
         """构建页面 UI"""
@@ -148,6 +155,10 @@ class ProductAnalyzerPage(BasePage):
         btn_layout.addStretch()
 
         layout.addLayout(btn_layout)
+
+        # 批量分析选项
+        self._batch_check = QCheckBox("批量分析（每行一个链接，依次处理）")
+        layout.addWidget(self._batch_check)
 
         # 进度条
         self._progress = QProgressBar()
@@ -320,6 +331,32 @@ class ProductAnalyzerPage(BasePage):
         )
         result_content_layout.addWidget(self._error_label)
 
+        # 5) 批量结果汇总
+        self._batch_summary_label = QLabel()
+        self._batch_summary_label.setVisible(False)
+        self._batch_summary_label.setStyleSheet(
+            "font-weight: bold; font-size: 11pt; padding: 4px 0;"
+        )
+        result_content_layout.addWidget(self._batch_summary_label)
+
+        self._batch_table = QTableWidget(0, 5)
+        self._batch_table.setVisible(False)
+        self._batch_table.setHorizontalHeaderLabels([
+            "平台", "商品ID", "标题", "价格", "状态"
+        ])
+        self._batch_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._batch_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._batch_table.setAlternatingRowColors(True)
+        self._batch_table.verticalHeader().setVisible(False)
+        self._batch_table.setMaximumHeight(300)
+        bheader = self._batch_table.horizontalHeader()
+        bheader.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        bheader.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        bheader.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        bheader.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        bheader.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        result_content_layout.addWidget(self._batch_table)
+
         result_content_layout.addStretch()
         scroll.setWidget(result_content)
         result_layout.addWidget(scroll)
@@ -337,13 +374,20 @@ class ProductAnalyzerPage(BasePage):
             QMessageBox.warning(self, "提示", "请输入商品链接")
             return
 
-        # 取第一行作为分析链接
-        url = url_text.split("\n")[0].strip()
-        if not url:
-            QMessageBox.warning(self, "提示", "链接不能为空")
-            return
-
-        self._start_analysis(url)
+        # 判断是否批量模式
+        if self._batch_check and self._batch_check.isChecked():
+            urls = [line.strip() for line in url_text.split("\n") if line.strip()]
+            if not urls:
+                QMessageBox.warning(self, "提示", "链接不能为空")
+                return
+            if len(urls) == 1:
+                # 单条链接直接用单次分析
+                self._start_analysis(urls[0])
+                return
+            self._start_batch_analysis(urls)
+        else:
+            url = url_text.split("\n")[0].strip()
+            self._start_analysis(url)
 
     def _on_clear_clicked(self):
         """清空输入和结果"""
@@ -451,6 +495,96 @@ class ProductAnalyzerPage(BasePage):
         self._progress.setVisible(False)
         self._set_ui_enabled(True)
 
+    # ===================== 批量分析 =====================
+
+    def _start_batch_analysis(self, urls: list[str]):
+        """启动批量分析"""
+        self._batch_results = []
+        self._set_ui_enabled(False)
+        self._batch_table.setVisible(True)
+        self._batch_table.setRowCount(0)
+        self._batch_summary_label.setVisible(True)
+        self._batch_summary_label.setText(f"批量分析中 (0/{len(urls)})...")
+        self._progress.setVisible(True)
+        self._progress.setMinimum(0)
+        self._progress.setMaximum(len(urls))
+        self._progress.setValue(0)
+        self._status_label.setText(f"批量分析中: 共 {len(urls)} 个链接")
+        self._error_label.setVisible(False)
+
+        # 清理旧 worker
+        if self._batch_worker and self._batch_worker.isRunning():
+            self._batch_worker.terminate()
+            self._batch_worker.wait(2000)
+            self._batch_worker = None
+
+        self._batch_worker = BatchScrapeWorker(urls)
+        self._batch_worker.progress.connect(self._on_batch_progress)
+        self._batch_worker.item_finished.connect(self._on_batch_item)
+        self._batch_worker.all_finished.connect(self._on_batch_all_finished)
+        self._batch_worker.error.connect(self._on_worker_error)
+        self._batch_worker.start()
+
+        self._logger.info(f"开始批量分析: {len(urls)} 个链接")
+
+    def _on_batch_progress(self, current: int, total: int):
+        """批量进度更新"""
+        self._progress.setValue(current)
+        self._batch_summary_label.setText(f"批量分析中 ({current}/{total})...")
+
+    def _on_batch_item(self, index: int, result: dict):
+        """单个链接分析完成"""
+        self._batch_results.append(result)
+        # 保存到数据库
+        try:
+            self._context.db.save_analysis_record(result)
+        except Exception as e:
+            self._logger.error(f"保存批量分析记录失败: {e}")
+
+        # 添加到历史
+        result_with_time = {
+            **result,
+            "time": datetime.now().strftime("%H:%M:%S"),
+        }
+        self._history.insert(0, result_with_time)
+        self._add_to_history_table(result_with_time)
+
+        # 更新批量结果表
+        row = self._batch_table.rowCount()
+        self._batch_table.insertRow(row)
+        self._batch_table.setItem(row, 0, QTableWidgetItem(result.get("platform", "")))
+        self._batch_table.setItem(row, 1, QTableWidgetItem(result.get("product_id", "")))
+        self._batch_table.setItem(row, 2, QTableWidgetItem(result.get("title", "")))
+        self._batch_table.setItem(row, 3, QTableWidgetItem(result.get("price", "")))
+        status = "✅ 成功" if result.get("success") else f"❌ {result.get('error_message', '失败')}"
+        item = QTableWidgetItem(status)
+        item.setForeground(QColor("#2ecc71" if result.get("success") else "#e74c3c"))
+        self._batch_table.setItem(row, 4, item)
+
+    def _on_batch_all_finished(self, results: list[dict]):
+        """批量分析全部完成"""
+        total = len(results)
+        success_count = sum(1 for r in results if r.get("success"))
+        self._on_worker_done()
+        self._batch_summary_label.setText(
+            f"批量分析完成: 共 {total} 条, 成功 {success_count}, 失败 {total - success_count}"
+        )
+        self._status_label.setText(
+            f"批量分析完成: 成功 {success_count}/{total}"
+        )
+        self._logger.info(f"批量分析完成: {success_count}/{total}")
+
+    def _add_to_history_table(self, result: dict):
+        """仅添加到历史表格（不重复保存 DB）"""
+        table = self._history_table
+        table.insertRow(0)
+        table.setItem(0, 0, QTableWidgetItem(result.get("time", "")))
+        table.setItem(0, 1, QTableWidgetItem(result.get("platform", "")))
+        table.setItem(0, 2, QTableWidgetItem(result.get("product_id", "")))
+        table.setItem(0, 3, QTableWidgetItem(result.get("title", "")))
+
+    # ===================== AI 优化跳转 =====================
+
     def _on_optimize_title(self):
         """将当前商品标题发送到 AI 标题优化页面"""
         if self._current_result and self._current_result.get("title"):
@@ -466,6 +600,8 @@ class ProductAnalyzerPage(BasePage):
             self._clear_btn.setEnabled(enabled)
         if self._url_input:
             self._url_input.setEnabled(enabled)
+        if self._batch_check:
+            self._batch_check.setEnabled(enabled)
 
     # ===================== 结果展示 =====================
 
@@ -524,8 +660,40 @@ class ProductAnalyzerPage(BasePage):
 
     # ===================== 历史记录 =====================
 
+    def on_show(self):
+        """页面显示时刷新历史记录"""
+        self._load_history_from_db()
+
+    def _load_history_from_db(self):
+        """从数据库加载分析历史记录"""
+        try:
+            db = self._context.db
+            records = db.get_analysis_history(limit=50)
+            # 先清空
+            self._history.clear()
+            self._history_table.setRowCount(0)
+            # 填充
+            for record in records:
+                self._history.append(record)
+                row = self._history_table.rowCount()
+                self._history_table.insertRow(row)
+                self._history_table.setItem(row, 0, QTableWidgetItem(
+                    record.get("created_at", "")[-8:] if record.get("created_at") else ""
+                ))
+                self._history_table.setItem(row, 1, QTableWidgetItem(record.get("platform", "")))
+                self._history_table.setItem(row, 2, QTableWidgetItem(record.get("product_id", "")))
+                self._history_table.setItem(row, 3, QTableWidgetItem(record.get("title", "")))
+        except Exception as e:
+            self._logger.error(f"加载分析历史失败: {e}")
+
     def _add_to_history(self, result: dict):
-        """将分析结果添加到历史表格"""
+        """将分析结果添加到历史表格并保存到数据库"""
+        # 保存到数据库
+        try:
+            self._context.db.save_analysis_record(result)
+        except Exception as e:
+            self._logger.error(f"保存分析记录到数据库失败: {e}")
+
         self._history.insert(0, result)
 
         table = self._history_table

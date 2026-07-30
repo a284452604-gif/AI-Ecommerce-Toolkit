@@ -21,15 +21,17 @@ from PySide6.QtWidgets import (
     QLineEdit, QRadioButton, QButtonGroup, QTextBrowser,
 )
 from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QColor
 
 from framework.base_page import BasePage
 from framework.app_context import AppContext
 from framework.ai_service_manager import create_ai_service
+from database.db_manager import DatabaseManager
 from apps.title_optimizer.title_optimizer import (
     TitleOptimizer, OptimizeResult, OPTIMIZE_STYLES,
 )
 from apps.title_optimizer.optimize_worker import OptimizeWorker, BatchOptimizeWorker
+from apps.title_optimizer.multi_title_worker import MultiTitleOptimizeWorker
 
 
 class TitleOptimizerPage(BasePage):
@@ -61,7 +63,8 @@ class TitleOptimizerPage(BasePage):
 
         # 状态
         self._history: list[OptimizeResult] = []
-        self._worker: OptimizeWorker | BatchOptimizeWorker | None = None
+        self._worker: OptimizeWorker | BatchOptimizeWorker | MultiTitleOptimizeWorker | None = None
+        self._multi_results: list[OptimizeResult] = []
 
         # UI 引用
         self._title_input: QTextEdit | None = None
@@ -69,6 +72,7 @@ class TitleOptimizerPage(BasePage):
         self._price_input: QLineEdit | None = None
         self._style_buttons: dict[str, QRadioButton] = {}
         self._batch_check: QCheckBox | None = None
+        self._multi_title_check: QCheckBox | None = None
         self._optimize_btn: QPushButton | None = None
         self._progress: QProgressBar | None = None
         self._status_label: QLabel | None = None
@@ -83,6 +87,8 @@ class TitleOptimizerPage(BasePage):
         self._error_label: QLabel | None = None
         self._result_stack: QWidget | None = None
         self._empty_result: QWidget | None = None
+        self._multi_table: QTableWidget | None = None
+        self._multi_summary_label: QLabel | None = None
 
         # 监听来自其他页面的请求
         self._context.signals.title_optimize_request.connect(self._on_external_request)
@@ -178,6 +184,10 @@ class TitleOptimizerPage(BasePage):
         self._batch_check = QCheckBox("对全部三种风格进行优化（对比效果）")
         self._batch_check.toggled.connect(self._on_batch_toggled)
         style_layout.addWidget(self._batch_check)
+
+        # 多标题批量
+        self._multi_title_check = QCheckBox("多标题批量优化（每行一个标题）")
+        style_layout.addWidget(self._multi_title_check)
 
         layout.addWidget(style_group)
 
@@ -336,6 +346,29 @@ class TitleOptimizerPage(BasePage):
         )
         rc_layout.addWidget(self._error_label)
 
+        # 多标题批量结果
+        self._multi_summary_label = QLabel()
+        self._multi_summary_label.setVisible(False)
+        self._multi_summary_label.setStyleSheet(
+            "font-weight: bold; font-size: 11pt; padding: 4px 0;"
+        )
+        rc_layout.addWidget(self._multi_summary_label)
+
+        self._multi_table = QTableWidget(0, 4)
+        self._multi_table.setVisible(False)
+        self._multi_table.setHorizontalHeaderLabels(["原标题", "优化标题", "风格", "状态"])
+        self._multi_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._multi_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._multi_table.setAlternatingRowColors(True)
+        self._multi_table.verticalHeader().setVisible(False)
+        self._multi_table.setMaximumHeight(300)
+        mheader = self._multi_table.horizontalHeader()
+        mheader.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        mheader.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        mheader.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        mheader.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        rc_layout.addWidget(self._multi_table)
+
         rc_layout.addStretch()
         scroll.setWidget(result_content)
         result_layout.addWidget(scroll)
@@ -361,7 +394,18 @@ class TitleOptimizerPage(BasePage):
             QMessageBox.warning(self, "提示", "请输入商品标题")
             return
 
-        self._start_optimization(title)
+        # 多标题批量模式
+        if self._multi_title_check and self._multi_title_check.isChecked():
+            titles = [t.strip() for t in title.split("\n") if t.strip()]
+            if len(titles) <= 1:
+                # 只有单行标题则退化为普通模式
+                self._start_optimization(titles[0])
+                return
+            self._start_multi_title_optimization(titles)
+        else:
+            # 取第一行
+            single_title = title.split("\n")[0].strip()
+            self._start_optimization(single_title)
 
     def _on_clear_clicked(self):
         if self._title_input:
@@ -495,6 +539,113 @@ class TitleOptimizerPage(BasePage):
         self._set_ui_enabled(True)
         self._status_label.setText("就绪")
 
+    # ===================== 多标题批量优化 =====================
+
+    def _start_multi_title_optimization(self, titles: list[str]):
+        """启动多标题批量优化"""
+        self._multi_results = []
+        self._multi_table.setVisible(True)
+        self._multi_table.setRowCount(0)
+        self._multi_summary_label.setVisible(True)
+        self._multi_summary_label.setText(f"批量优化中 (0/{len(titles)})...")
+        self._set_ui_enabled(False)
+        self._progress.setVisible(True)
+        self._progress.setMinimum(0)
+        self._progress.setMaximum(len(titles))
+        self._progress.setValue(0)
+        self._status_label.setText(f"多标题批量优化: 共 {len(titles)} 个标题")
+        self._error_label.setVisible(False)
+
+        # 清理旧 worker
+        if self._worker and self._worker.isRunning():
+            self._worker.terminate()
+            self._worker.wait(2000)
+            self._worker = None
+
+        style_key = self._get_selected_style() or "seo"
+        product_info = self._get_product_info()
+
+        self._worker = MultiTitleOptimizeWorker(
+            self._optimizer, titles, style_key, product_info
+        )
+        self._worker.progress.connect(self._on_multi_progress)
+        self._worker.item_finished.connect(self._on_multi_item)
+        self._worker.all_finished.connect(self._on_multi_all_finished)
+        self._worker.error.connect(self._on_worker_error)
+        self._worker.start()
+
+        self._logger.info(f"开始多标题批量优化: {len(titles)} 个标题, 风格={style_key}")
+
+    def _on_multi_progress(self, current: int, total: int):
+        self._progress.setValue(current)
+        self._multi_summary_label.setText(f"批量优化中 ({current}/{total})...")
+
+    def _on_multi_item(self, result: OptimizeResult):
+        """单个标题优化完成"""
+        self._multi_results.append(result)
+        # 保存到数据库
+        try:
+            db_record = {
+                "original_title": result.original_title,
+                "optimized_title": result.optimized_title,
+                "style_key": result.style,
+                "style_name": result.style_name,
+                "seo_keywords": result.seo_keywords,
+                "improvement_reason": result.improvement_reason,
+                "tokens_used": result.tokens_used,
+                "success": result.success,
+                "error_message": result.error_message,
+                "product_info": {},
+            }
+            self._context.db.save_optimization_record(db_record)
+        except Exception as e:
+            self._logger.error(f"保存优化记录失败: {e}")
+
+        # 添加到历史
+        self._history.insert(0, result)
+        self._add_to_history_table(result)
+
+        # 更新批量结果表
+        row = self._multi_table.rowCount()
+        self._multi_table.insertRow(row)
+        self._multi_table.setItem(row, 0, QTableWidgetItem(
+            result.original_title[:40] + ("..." if len(result.original_title) > 40 else "")
+        ))
+        self._multi_table.setItem(row, 1, QTableWidgetItem(
+            result.optimized_title[:40] + ("..." if len(result.optimized_title) > 40 else "")
+        ))
+        self._multi_table.setItem(row, 2, QTableWidgetItem(result.style_name))
+        status = "✅ 成功" if result.success else f"❌ {result.error_message}"
+        item = QTableWidgetItem(status)
+        item.setForeground(QColor("#2ecc71" if result.success else "#e74c3c"))
+        self._multi_table.setItem(row, 3, item)
+
+    def _on_multi_all_finished(self, results: list[OptimizeResult]):
+        """多标题批量优化全部完成"""
+        total = len(results)
+        success_count = sum(1 for r in results if r.success)
+        total_tokens = sum(r.tokens_used for r in results if r.success)
+        self._on_worker_done()
+        self._multi_summary_label.setText(
+            f"批量优化完成: 共 {total} 个, 成功 {success_count}, Token 消耗: {total_tokens}"
+        )
+        self._status_label.setText(f"多标题优化完成: 成功 {success_count}/{total}")
+        self._logger.info(f"多标题优化完成: {success_count}/{total}, tokens={total_tokens}")
+
+    def _add_to_history_table(self, result: OptimizeResult):
+        """仅添加到历史表格（不重复保存 DB）"""
+        table = self._history_table
+        table.insertRow(0)
+        now = datetime.now().strftime("%H:%M:%S")
+        table.setItem(0, 0, QTableWidgetItem(now))
+        table.setItem(0, 1, QTableWidgetItem(result.style_name))
+        table.setItem(0, 2, QTableWidgetItem(
+            result.original_title[:50] + ("..." if len(result.original_title) > 50 else "")
+        ))
+        table.setItem(0, 3, QTableWidgetItem(
+            result.optimized_title[:50] + ("..." if len(result.optimized_title) > 50 else "")
+        ))
+
     def _set_ui_enabled(self, enabled: bool):
         if self._optimize_btn:
             self._optimize_btn.setEnabled(enabled)
@@ -524,7 +675,65 @@ class TitleOptimizerPage(BasePage):
 
     # ===================== 历史记录 =====================
 
+    def on_show(self):
+        """页面显示时刷新历史记录"""
+        self._load_history_from_db()
+
+    def _load_history_from_db(self):
+        """从数据库加载优化历史"""
+        try:
+            db = self._context.db
+            records = db.get_optimization_history(limit=50)
+            self._history.clear()
+            self._history_table.setRowCount(0)
+            for record in records:
+                # 将 DB 记录转为 OptimizeResult 兼容格式
+                result = OptimizeResult(
+                    original_title=record.get("original_title", ""),
+                    optimized_title=record.get("optimized_title", ""),
+                    style=record.get("style_key", ""),
+                    style_name=record.get("style_name", ""),
+                    seo_keywords=record.get("seo_keywords", []),
+                    improvement_reason=record.get("improvement_reason", ""),
+                    tokens_used=record.get("tokens_used", 0),
+                    success=record.get("success", True),
+                    error_message=record.get("error_message", ""),
+                )
+                self._history.append(result)
+                row = self._history_table.rowCount()
+                self._history_table.insertRow(row)
+                self._history_table.setItem(row, 0, QTableWidgetItem(
+                    record.get("created_at", "")[-8:] if record.get("created_at") else ""
+                ))
+                self._history_table.setItem(row, 1, QTableWidgetItem(record.get("style_name", "")))
+                self._history_table.setItem(row, 2, QTableWidgetItem(
+                    result.original_title[:50] + ("..." if len(result.original_title) > 50 else "")
+                ))
+                self._history_table.setItem(row, 3, QTableWidgetItem(
+                    result.optimized_title[:50] + ("..." if len(result.optimized_title) > 50 else "")
+                ))
+        except Exception as e:
+            self._logger.error(f"加载优化历史失败: {e}")
+
     def _add_to_history(self, result: OptimizeResult):
+        # 保存到数据库
+        try:
+            db_record = {
+                "original_title": result.original_title,
+                "optimized_title": result.optimized_title,
+                "style_key": result.style,
+                "style_name": result.style_name,
+                "seo_keywords": result.seo_keywords,
+                "improvement_reason": result.improvement_reason,
+                "tokens_used": result.tokens_used,
+                "success": result.success,
+                "error_message": result.error_message,
+                "product_info": {},
+            }
+            self._context.db.save_optimization_record(db_record)
+        except Exception as e:
+            self._logger.error(f"保存优化记录到数据库失败: {e}")
+
         self._history.insert(0, result)
         table = self._history_table
         table.insertRow(0)
