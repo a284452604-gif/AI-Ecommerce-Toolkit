@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QComboBox,
     QPushButton,
     QMessageBox,
+    QPlainTextEdit,
+    QCheckBox,
 )
 from PySide6.QtCore import Qt
 
@@ -143,6 +145,51 @@ class SettingsPage(BasePage):
 
         layout.addWidget(log_group)
 
+        # === 商品抓取设置 ===
+        scraper_group = QGroupBox("商品抓取设置")
+        scraper_layout = QFormLayout(scraper_group)
+        scraper_layout.setSpacing(12)
+        scraper_layout.setContentsMargins(16, 20, 16, 16)
+
+        self._browser_check = QCheckBox("启用浏览器抓取（推荐：可渲染 JS、绕过反爬获取真实标题/价格/店铺）")
+        self._browser_check.setChecked(True)
+        scraper_layout.addRow(self._browser_check)
+
+        cookie_help = QLabel(
+            "填入已登录对应平台的浏览器 Cookie（F12 → Application → Cookies 复制），"
+            "可抓取价格、店铺等登录后才显示的信息。不填则仅能获取未登录可见内容。"
+        )
+        cookie_help.setWordWrap(True)
+        cookie_help.setObjectName("PageSubtitle")
+        scraper_layout.addRow(cookie_help)
+
+        self._cookie_taobao = QPlainTextEdit()
+        self._cookie_taobao.setPlaceholderText("淘宝 Cookie: key1=val1; key2=val2")
+        self._cookie_taobao.setMaximumHeight(54)
+        scraper_layout.addRow("淘宝:", self._cookie_taobao)
+
+        self._cookie_tmall = QPlainTextEdit()
+        self._cookie_tmall.setPlaceholderText("天猫 Cookie: key1=val1; key2=val2")
+        self._cookie_tmall.setMaximumHeight(54)
+        scraper_layout.addRow("天猫:", self._cookie_tmall)
+
+        self._cookie_jd = QPlainTextEdit()
+        self._cookie_jd.setPlaceholderText("京东 Cookie: key1=val1; key2=val2")
+        self._cookie_jd.setMaximumHeight(54)
+        scraper_layout.addRow("京东:", self._cookie_jd)
+
+        self._cookie_pdd = QPlainTextEdit()
+        self._cookie_pdd.setPlaceholderText("拼多多 Cookie: key1=val1; key2=val2")
+        self._cookie_pdd.setMaximumHeight(54)
+        scraper_layout.addRow("拼多多:", self._cookie_pdd)
+
+        self._cookie_douyin = QPlainTextEdit()
+        self._cookie_douyin.setPlaceholderText("抖音 Cookie: key1=val1; key2=val2")
+        self._cookie_douyin.setMaximumHeight(54)
+        scraper_layout.addRow("抖音:", self._cookie_douyin)
+
+        layout.addWidget(scraper_group)
+
         # === 按钮区域 ===
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
@@ -194,6 +241,15 @@ class SettingsPage(BasePage):
         self._max_bytes_spin.setValue(config.get("logging.max_bytes", 5242880))
         self._backup_count_spin.setValue(config.get("logging.backup_count", 10))
 
+        # 商品抓取
+        self._browser_check.setChecked(config.get("scraper.browser_enabled", True))
+        cookies = config.get("scraper.cookies", {}) or {}
+        self._cookie_taobao.setPlainText(cookies.get("taobao", ""))
+        self._cookie_tmall.setPlainText(cookies.get("tmall", ""))
+        self._cookie_jd.setPlainText(cookies.get("jd", ""))
+        self._cookie_pdd.setPlainText(cookies.get("pdd", ""))
+        self._cookie_douyin.setPlainText(cookies.get("douyin", ""))
+
     def _save_ui_to_config(self):
         """将 UI 控件的值保存到配置"""
         config = self._context.config
@@ -215,6 +271,17 @@ class SettingsPage(BasePage):
         config.set("logging.level", self._log_level_combo.currentText())
         config.set("logging.max_bytes", self._max_bytes_spin.value())
         config.set("logging.backup_count", self._backup_count_spin.value())
+
+        # 商品抓取
+        config.set("scraper.browser_enabled", self._browser_check.isChecked())
+        cookies = {
+            "taobao": self._cookie_taobao.toPlainText().strip(),
+            "tmall": self._cookie_tmall.toPlainText().strip(),
+            "jd": self._cookie_jd.toPlainText().strip(),
+            "pdd": self._cookie_pdd.toPlainText().strip(),
+            "douyin": self._cookie_douyin.toPlainText().strip(),
+        }
+        config.set("scraper.cookies", cookies)
 
     def _on_save(self):
         """保存设置"""

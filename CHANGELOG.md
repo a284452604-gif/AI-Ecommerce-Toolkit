@@ -1,5 +1,25 @@
 # 变更日志
 
+## [1.1.0] - 2026-07-30
+
+### 新增
+- **Playwright 浏览器抓取（V1.1 核心）**
+  - 新增 `apps/product_analyzer/browser_scraper.py`：基于真实 Chromium 渲染 JS 页面
+  - 自动降级：httpx 拿不到核心数据时，自动改用浏览器抓取
+  - 浏览器实例懒加载单例复用，降低每条链接启动开销
+  - 登录页/验证页识别，避免把登录页误判为成功
+  - 按平台注入登录 Cookie（淘宝/天猫/京东/拼多多/抖音），绕过登录限制获取价格、店铺
+  - `settings` 页新增「商品抓取设置」分组：浏览器抓取开关 + 各平台 Cookie 输入
+- 依赖新增：`playwright`（Python 包）+ 下载 Chromium 浏览器二进制
+
+### 改进
+- 商品抓取失败提示更明确（区分反爬/登录/空页面等场景）
+- 默认配置 `scraper.browser_enabled = true`
+
+### 测试
+- 新增 `tests/test_browser_scraper.py`：Cookie 解析、平台域名映射、可用性检查
+- 全部测试 30/30 通过
+
 ## [1.0.0] - 2026-07-30
 
 ### 新增

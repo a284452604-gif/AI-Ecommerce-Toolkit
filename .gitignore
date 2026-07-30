@@ -36,3 +36,6 @@ Desktop.ini
 
 # Database (runtime data)
 data/
+
+# Workspace memory (runtime notes, not project source)
+.workbuddy/memory/

@@ -86,15 +86,25 @@ class ProductScraper:
         },
     }
 
-    def __init__(self, timeout: float = 15.0, max_redirects: int = 5):
+    def __init__(
+        self,
+        timeout: float = 15.0,
+        max_redirects: int = 5,
+        browser_enabled: Optional[bool] = None,
+        cookies: Optional[dict] = None,
+    ):
         """初始化抓取器
 
         Args:
             timeout: 请求超时时间（秒）
             max_redirects: 最大重定向次数
+            browser_enabled: 是否启用浏览器降级抓取（None 表示读取全局配置）
+            cookies: 各平台 Cookie 字典（None 表示读取全局配置）
         """
         self._timeout = timeout
         self._max_redirects = max_redirects
+        self._browser_enabled = browser_enabled
+        self._cookies = cookies
 
     def scrape(self, parsed_link: ParsedLink) -> ProductInfo:
         """抓取商品信息
@@ -157,7 +167,18 @@ class ProductScraper:
             if not info.image_urls:
                 self._extract_images(soup, info)
 
-            info.success = bool(info.title)
+            # httpx 未拿到核心信息，尝试浏览器渲染降级
+            info = self._try_browser_fallback(parsed_link, info)
+
+            # 最终判定：仍无有效数据则给出提示
+            if not self._has_meaningful_data(info):
+                if not info.error_message:
+                    info.error_message = self._detect_anti_crawl(soup, html) or (
+                        "未能提取到商品信息。常见原因：页面需要登录、触发反爬验证、"
+                        "商品已下架或页面为纯 JS 渲染。"
+                    )
+
+            info.success = bool(info.title and info.title != "未知标题")
             info.fetch_time = round(time.time() - start_time, 2)
 
         except httpx.TimeoutException:
@@ -171,6 +192,59 @@ class ProductScraper:
             info.fetch_time = round(time.time() - start_time, 2)
 
         return info
+
+    def _try_browser_fallback(self, parsed_link: ParsedLink, httpx_info: ProductInfo) -> ProductInfo:
+        """httpx 未拿到有效数据时，尝试用 Playwright 浏览器渲染抓取
+
+        Args:
+            parsed_link: 解析后的链接
+            httpx_info: httpx 抓取结果（作为兜底）
+
+        Returns:
+            浏览器抓取结果（若更优），否则返回 httpx_info
+        """
+        browser_enabled = self._browser_enabled
+        cookies = self._cookies
+
+        # 懒加载配置（来自 AppContext）
+        if browser_enabled is None or cookies is None:
+            try:
+                from framework.app_context import AppContext
+                cfg = AppContext().config
+                if browser_enabled is None:
+                    browser_enabled = cfg.get("scraper.browser_enabled", False)
+                if cookies is None:
+                    cookies = cfg.get("scraper.cookies", {}) or {}
+            except Exception:
+                if browser_enabled is None:
+                    browser_enabled = False
+                if cookies is None:
+                    cookies = {}
+
+        if not browser_enabled:
+            return httpx_info
+
+        from apps.product_analyzer.browser_scraper import BrowserScraper
+        if not BrowserScraper.is_available():
+            return httpx_info
+
+        # httpx 已拿到有效数据则无需降级
+        if self._has_meaningful_data(httpx_info):
+            return httpx_info
+
+        try:
+            browser_info = BrowserScraper(timeout=self._timeout, cookies=cookies).scrape(parsed_link)
+            if browser_info.success or self._has_meaningful_data(browser_info):
+                return browser_info
+            if browser_info.error_message:
+                httpx_info.error_message = httpx_info.error_message or browser_info.error_message
+            return httpx_info
+        except Exception as e:
+            httpx_info.error_message = (
+                (httpx_info.error_message + f"；浏览器抓取异常: {e}")
+                if httpx_info.error_message else f"浏览器抓取异常: {e}"
+            )
+            return httpx_info
 
     def _fetch_page(self, url: str, platform: Platform) -> Optional[str]:
         """发送HTTP请求获取页面HTML"""
@@ -361,3 +435,52 @@ class ProductScraper:
                 price = data.get("price") or data.get("min_price")
                 if price:
                     info.price = f"¥{int(price) / 100:.2f}"
+
+    def _has_meaningful_data(self, info: ProductInfo) -> bool:
+        """判断抓取结果中是否包含有效商品信息"""
+        return bool(
+            (info.title and info.title != "未知标题")
+            or info.price
+            or info.shop_name
+            or info.description
+            or info.image_urls
+        )
+
+    def _detect_anti_crawl(self, soup: BeautifulSoup, html: str) -> Optional[str]:
+        """检测页面是否包含反爬/登录/验证提示
+
+        Args:
+            soup: BeautifulSoup 对象
+            html: 原始 HTML 文本
+
+        Returns:
+            检测到的提示信息，未识别返回 None
+        """
+        text = (html or "").lower()
+        title = ""
+        if soup.title and soup.title.string:
+            title = soup.title.string.strip().lower()
+
+        login_markers = ["login", "登录", "请登录", "亲，请登录", "登录淘宝"]
+        captcha_markers = ["captcha", "验证码", "滑块", "slide", "拖动滑块"]
+        verify_markers = ["verify", "verification", "验证", "安全验证", "身份验证", "访问验证"]
+        app_markers = ["请使用app", "请使用淘宝app", "打开app", "移动端查看"]
+        anti_bot_markers = ["anti-spider", "anti spider", "反爬", "bot check", "机器人", "reauth"]
+
+        if any(m in text or m in title for m in login_markers):
+            return "该商品页面要求登录后才能查看，当前无法提取商品信息。"
+        if any(m in text or m in title for m in captcha_markers):
+            return "页面触发了验证码/滑块验证，当前无法提取商品信息。"
+        if any(m in text or m in title for m in verify_markers):
+            return "页面触发了安全验证，建议稍后再试或更换网络环境。"
+        if any(m in text or m in title for m in app_markers):
+            return "该页面要求使用 App 打开，当前无法提取商品信息。"
+        if any(m in text or m in title for m in anti_bot_markers):
+            return "页面检测到机器人访问，已被反爬拦截，当前无法提取商品信息。"
+
+        # 页面内容极少时，大概率是空页面/JS 渲染页
+        body_text = soup.body.get_text(strip=True) if soup.body else ""
+        if len(body_text) < 200:
+            return "返回的页面内容为空或过短，可能是页面需要 JS 渲染或已被拦截。"
+
+        return None
