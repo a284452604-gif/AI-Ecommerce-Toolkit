@@ -1,7 +1,7 @@
 {
     "app": {
         "name": "AI电商工具箱",
-        "version": "0.1.0"
+        "version": "0.2.0"
     },
     "window": {
         "width": 1200,
@@ -16,6 +16,11 @@
         "model": "",
         "base_url": "",
         "timeout": 30
+    },
+    "scraper": {
+        "timeout": 15,
+        "max_redirects": 5,
+        "max_history": 50
     },
     "appearance": {
         "theme": "light",

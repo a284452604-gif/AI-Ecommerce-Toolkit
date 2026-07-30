@@ -115,9 +115,11 @@ class MainWindow(QMainWindow):
         from apps.home.home_page import HomePage
         from apps.settings.settings_page import SettingsPage
         from apps.about.about_page import AboutPage
+        from apps.product_analyzer.product_analyzer_page import ProductAnalyzerPage
 
         pages: list[BasePage] = [
             HomePage("home", "首页", "home"),
+            ProductAnalyzerPage("product_analyzer", "商品链接分析", "analyze"),
             SettingsPage("settings", "系统设置", "settings"),
             AboutPage("about", "关于", "about"),
         ]
