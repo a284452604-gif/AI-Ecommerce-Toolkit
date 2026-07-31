@@ -42,6 +42,14 @@ class BaseAIService(ABC):
     def is_initialized(self) -> bool:
         return self._initialized
 
+    @property
+    def supports_vision(self) -> bool:
+        """当前模型是否支持图片（vision）输入
+
+        子类应根据实际配置的模型返回。默认 False。
+        """
+        return False
+
     @abstractmethod
     def initialize(self):
         """初始化服务：验证 API 连接"""
@@ -78,10 +86,23 @@ class DeepSeekService(BaseAIService):
     DEFAULT_BASE_URL = "https://api.deepseek.com"
     DEFAULT_MODEL = "deepseek-chat"
 
+    # DeepSeek 官方已知不支持 vision 的模型
+    _NON_VISION_MODELS = {"deepseek-chat", "deepseek-reasoner", "deepseek-coder"}
+
     def __init__(self, api_key: str, model: str = DEFAULT_MODEL,
                  base_url: str = DEFAULT_BASE_URL, timeout: int = 30):
         super().__init__(api_key, model, base_url, timeout)
         self._client: OpenAI | None = None
+
+    @property
+    def supports_vision(self) -> bool:
+        """DeepSeek 当前官方 chat/reasoner/coder 模型均不支持 vision 输入"""
+        model = (self._model or "").lower().strip()
+        # 用户明确配置 vision 模型名时放行
+        if "vl" in model or "vision" in model:
+            return True
+        # 已知非 vision 模型或未知模型均按不支持处理（保守策略）
+        return False
 
     def initialize(self):
         """初始化 DeepSeek 客户端"""

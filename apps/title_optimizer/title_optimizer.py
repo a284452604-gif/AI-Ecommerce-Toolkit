@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from framework.ai_service import AIResponse
+from utils.image_ocr import extract_text_from_images, is_ocr_available
 
 
 # ── 优化风格定义 ───────────────────────────────────────────
@@ -144,8 +145,22 @@ class TitleOptimizer:
                 error_message=f"未知的优化风格: {style_key}",
             )
 
+        # 处理截图：vision 模型直接传图；非 vision 模型尝试 OCR 提取文字追加到 prompt
+        images_for_model: list[str] | None = image_paths
+        ocr_text = ""
+        if image_paths and not self._ai.supports_vision:
+            images_for_model = None
+            extracted = extract_text_from_images(image_paths)
+            if extracted:
+                ocr_text = "\n\n".join(
+                    f"[截图 {idx + 1} 文字识别结果]\n{text}"
+                    for idx, text in enumerate(extracted.values())
+                )
+            elif not is_ocr_available():
+                ocr_text = "[提示：当前模型不支持图片输入，且 OCR 引擎未安装，截图内容无法被 AI 使用。请安装 rapidocr-onnxruntime 或手动填写下方搜索词榜单数据。]"
+
         user_prompt = self._build_user_prompt(
-            original_title, product_info, market_data
+            original_title, product_info, market_data, ocr_text
         )
 
         response: AIResponse = self._ai.chat(
@@ -153,17 +168,25 @@ class TitleOptimizer:
             user_prompt=user_prompt,
             temperature=style.temperature,
             max_tokens=style.max_tokens,
-            image_paths=image_paths,
+            image_paths=images_for_model,
         )
 
         if not response.success:
+            # 若是因 image_url 不被支持导致的失败，给出更明确的提示
+            error_msg = response.error_message
+            if "image_url" in error_msg.lower() or "unknown variant" in error_msg.lower():
+                error_msg = (
+                    f"{error_msg}\n\n当前模型 '{self._ai.model}' 不支持图片输入。"
+                    "如上传了截图，请切换至支持 vision 的模型（如 gpt-4o），"
+                    "或安装 OCR 依赖后重试。"
+                )
             return OptimizeResult(
                 original_title=original_title,
                 optimized_title="",
                 style=style_key,
                 style_name=style.name,
                 success=False,
-                error_message=response.error_message,
+                error_message=error_msg,
             )
 
         parsed = self._parse_response(response.content)
@@ -180,7 +203,8 @@ class TitleOptimizer:
         )
 
     def _build_user_prompt(self, title: str, product_info: dict | None,
-                           market_data: list[dict] | None) -> str:
+                           market_data: list[dict] | None,
+                           ocr_text: str = "") -> str:
         """构建用户 prompt"""
         lines = [f"原标题：{title}"]
         if product_info:
@@ -214,6 +238,12 @@ class TitleOptimizer:
                     str(row.get("modifier_word", "")),
                 ]
                 lines.append(" | ".join(cells))
+
+        # OCR 提取的截图文字
+        if ocr_text:
+            lines.append("")
+            lines.append("平台数据截图文字识别结果：")
+            lines.append(ocr_text)
 
         lines.append("")
         lines.append("请按以下格式输出（不要输出任何其他内容）：")

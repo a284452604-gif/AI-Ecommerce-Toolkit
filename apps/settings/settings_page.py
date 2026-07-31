@@ -80,9 +80,27 @@ class SettingsPage(BasePage):
         self._api_key_edit.setPlaceholderText("输入 API Key")
         ai_layout.addRow("API Key:", self._api_key_edit)
 
-        self._model_edit = QLineEdit()
-        self._model_edit.setPlaceholderText("如 gpt-4o, deepseek-chat 等")
-        ai_layout.addRow("模型名称:", self._model_edit)
+        self._model_combo = QComboBox()
+        self._model_combo.setEditable(True)
+        self._model_combo.setToolTip(
+            "选择或输入模型名称。若需上传平台数据截图，请选择支持 vision 的模型（如 gpt-4o）；"
+            "DeepSeek 官方模型（deepseek-chat/reasoner）不支持图片输入，将自动使用 OCR 提取文字。"
+        )
+        # 预设模型：value 格式 "显示名 (是否支持 vision)"
+        self._model_combo.addItem("deepseek-chat (DeepSeek 文本模型，不支持图片)", "deepseek-chat")
+        self._model_combo.addItem("deepseek-reasoner (DeepSeek 推理模型，不支持图片)", "deepseek-reasoner")
+        self._model_combo.addItem("gpt-4o (OpenAI 视觉模型，支持图片)", "gpt-4o")
+        self._model_combo.addItem("gpt-4o-mini (OpenAI 视觉模型，支持图片)", "gpt-4o-mini")
+        self._model_combo.addItem("claude-3-5-sonnet (Anthropic 视觉模型，支持图片)", "claude-3-5-sonnet-20241022")
+        ai_layout.addRow("模型名称:", self._model_combo)
+
+        self._vision_hint = QLabel(
+            "提示：当前模型不支持图片输入，上传截图时将自动通过 OCR 提取文字使用。"
+        )
+        self._vision_hint.setWordWrap(True)
+        self._vision_hint.setStyleSheet("color: #e67e22; font-size: 9pt;")
+        ai_layout.addRow(self._vision_hint)
+        self._model_combo.currentTextChanged.connect(self._update_vision_hint)
 
         self._base_url_edit = QLineEdit()
         self._base_url_edit.setPlaceholderText("如 https://api.openai.com/v1")
@@ -219,6 +237,27 @@ class SettingsPage(BasePage):
         """连接信号槽"""
         pass
 
+    def _update_vision_hint(self, text: str):
+        """根据当前模型更新 vision 能力提示"""
+        model = text.split(" ")[0] if text else ""
+        model_lower = model.lower()
+        supports_vision = (
+            "vl" in model_lower
+            or "vision" in model_lower
+            or "gpt-4o" in model_lower
+            or "claude-3-5" in model_lower
+            or "claude-3-7" in model_lower
+        )
+        if supports_vision:
+            self._vision_hint.setText("当前模型支持图片输入，可直接上传平台数据截图。")
+            self._vision_hint.setStyleSheet("color: #27ae60; font-size: 9pt;")
+        else:
+            self._vision_hint.setText(
+                "当前模型不支持图片输入，上传截图时将自动通过 OCR 提取文字使用；"
+                "如需直接识别截图，请切换至 gpt-4o / claude-3-5-sonnet 等 vision 模型。"
+            )
+            self._vision_hint.setStyleSheet("color: #e67e22; font-size: 9pt;")
+
     def _load_config_to_ui(self):
         """从配置加载当前值到 UI 控件"""
         config = self._context.config
@@ -226,7 +265,12 @@ class SettingsPage(BasePage):
         # AI 服务
         self._provider_combo.setCurrentText(config.get("ai_service.provider", ""))
         self._api_key_edit.setText(config.get("ai_service.api_key", ""))
-        self._model_edit.setText(config.get("ai_service.model", ""))
+        model = config.get("ai_service.model", "")
+        self._model_combo.setCurrentText(model)
+        # 若预设列表中无该模型，直接作为自定义项填入
+        if self._model_combo.currentText() != model:
+            self._model_combo.setEditText(model)
+        self._update_vision_hint(self._model_combo.currentText())
         self._base_url_edit.setText(config.get("ai_service.base_url", ""))
         self._timeout_spin.setValue(config.get("ai_service.timeout", 30))
 
@@ -257,7 +301,11 @@ class SettingsPage(BasePage):
         # AI 服务
         config.set("ai_service.provider", self._provider_combo.currentText())
         config.set("ai_service.api_key", self._api_key_edit.text())
-        config.set("ai_service.model", self._model_edit.text())
+        # 优先取 combo 当前数据（预设项），否则取编辑文本
+        model = self._model_combo.currentData()
+        if not model:
+            model = self._model_combo.currentText().strip()
+        config.set("ai_service.model", model)
         config.set("ai_service.base_url", self._base_url_edit.text())
         config.set("ai_service.timeout", self._timeout_spin.value())
 

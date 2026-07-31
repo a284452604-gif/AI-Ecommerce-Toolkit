@@ -10,11 +10,17 @@ from framework.ai_service import AIResponse
 
 
 class FakeAIService:
-    """模拟 AI 服务"""
+    """模拟 AI 服务（不支持 vision）"""
+
+    supports_vision = False
 
     def __init__(self):
         self.last_image_paths = None
         self.last_user_prompt = None
+
+    @property
+    def model(self) -> str:
+        return "fake-model"
 
     def chat(self, system_prompt: str, user_prompt: str,
              temperature: float = 0.7, max_tokens: int = 2048,
@@ -31,6 +37,12 @@ class FakeAIService:
             success=True,
             tokens_total=100,
         )
+
+
+class FakeVisionAIService(FakeAIService):
+    """模拟支持 vision 的 AI 服务"""
+
+    supports_vision = True
 
 
 @pytest.fixture
@@ -70,7 +82,8 @@ def test_optimize_with_market_data(optimizer):
     assert result.keyword_layout == "核心词+修饰词+属性词"
     assert "连衣裙" in optimizer._ai.last_user_prompt
     assert "飙升榜" in optimizer._ai.last_user_prompt
-    assert optimizer._ai.last_image_paths == ["fake.png"]
+    # 非 vision 模型且截图不存在时，不应再向 AI 发送图片
+    assert optimizer._ai.last_image_paths is None
 
 
 def test_build_user_prompt_without_market_data(optimizer):
@@ -111,3 +124,15 @@ def test_unknown_style_returns_error():
     result = opt.optimize("标题", style_key="not_exist")
     assert not result.success
     assert "未知" in result.error_message
+
+
+def test_vision_model_receives_images():
+    """支持 vision 的模型会原样收到图片路径"""
+    opt = TitleOptimizer(FakeVisionAIService())
+    result = opt.optimize(
+        "测试标题",
+        style_key="seo",
+        image_paths=["screenshot.png"],
+    )
+    assert result.success
+    assert opt._ai.last_image_paths == ["screenshot.png"]
