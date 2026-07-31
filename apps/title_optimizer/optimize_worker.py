@@ -18,12 +18,16 @@ class OptimizeWorker(QThread):
     error_signal = Signal(str)
 
     def __init__(self, optimizer: TitleOptimizer, original_title: str,
-                 style_key: str, product_info: dict | None = None):
+                 style_key: str, product_info: dict | None = None,
+                 market_data: list[dict] | None = None,
+                 image_paths: list[str] | None = None):
         super().__init__()
         self._optimizer = optimizer
         self._original_title = original_title
         self._style_key = style_key
         self._product_info = product_info
+        self._market_data = market_data
+        self._image_paths = image_paths
 
     def run(self):
         """在后台线程执行优化"""
@@ -32,6 +36,8 @@ class OptimizeWorker(QThread):
                 original_title=self._original_title,
                 style_key=self._style_key,
                 product_info=self._product_info,
+                market_data=self._market_data,
+                image_paths=self._image_paths,
             )
             self.finished_signal.emit(result)
         except Exception as e:
@@ -47,12 +53,16 @@ class BatchOptimizeWorker(QThread):
     error_signal = Signal(str)
 
     def __init__(self, optimizer: TitleOptimizer, original_title: str,
-                 style_keys: list[str], product_info: dict | None = None):
+                 style_keys: list[str], product_info: dict | None = None,
+                 market_data: list[dict] | None = None,
+                 image_paths: list[str] | None = None):
         super().__init__()
         self._optimizer = optimizer
         self._original_title = original_title
         self._style_keys = style_keys
         self._product_info = product_info
+        self._market_data = market_data
+        self._image_paths = image_paths
 
     def run(self):
         """依次执行所有风格的优化"""
@@ -65,6 +75,8 @@ class BatchOptimizeWorker(QThread):
                     original_title=self._original_title,
                     style_key=key,
                     product_info=self._product_info,
+                    market_data=self._market_data,
+                    image_paths=self._image_paths,
                 )
                 self.result_signal.emit(result)
                 results.append(result)

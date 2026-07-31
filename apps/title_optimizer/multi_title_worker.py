@@ -25,12 +25,16 @@ class MultiTitleOptimizeWorker(QThread):
     error = Signal(str)
 
     def __init__(self, optimizer: TitleOptimizer, titles: list[str],
-                 style_key: str, product_info: dict | None = None, parent=None):
+                 style_key: str, product_info: dict | None = None,
+                 market_data: list[dict] | None = None,
+                 image_paths: list[str] | None = None, parent=None):
         super().__init__(parent)
         self._optimizer = optimizer
         self._titles = titles
         self._style_key = style_key
         self._product_info = product_info
+        self._market_data = market_data
+        self._image_paths = image_paths
 
     def run(self):
         results = []
@@ -43,6 +47,8 @@ class MultiTitleOptimizeWorker(QThread):
                     title.strip(),
                     style_key=self._style_key,
                     product_info=self._product_info,
+                    market_data=self._market_data,
+                    image_paths=self._image_paths,
                 )
                 results.append(result)
                 self.item_finished.emit(result)

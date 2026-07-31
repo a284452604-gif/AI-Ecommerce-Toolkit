@@ -1,6 +1,9 @@
 """AI 服务层：提供统一的 AI 服务接口，支持多供应商切换"""
 
 from abc import ABC, abstractmethod
+import base64
+import mimetypes
+from pathlib import Path
 from dataclasses import dataclass, field
 from openai import OpenAI
 
@@ -46,7 +49,8 @@ class BaseAIService(ABC):
 
     @abstractmethod
     def chat(self, system_prompt: str, user_prompt: str,
-             temperature: float = 0.7, max_tokens: int = 2048) -> AIResponse:
+             temperature: float = 0.7, max_tokens: int = 2048,
+             image_paths: list[str] | None = None) -> AIResponse:
         """发送单轮对话请求
 
         Args:
@@ -54,6 +58,7 @@ class BaseAIService(ABC):
             user_prompt: 用户输入
             temperature: 创意程度 0-2
             max_tokens: 最大输出 token 数
+            image_paths: 随用户消息一起上传的本地图片路径列表（可选）
 
         Returns:
             AIResponse: 统一响应
@@ -91,17 +96,24 @@ class DeepSeekService(BaseAIService):
         self._initialized = True
 
     def chat(self, system_prompt: str, user_prompt: str,
-             temperature: float = 0.7, max_tokens: int = 2048) -> AIResponse:
-        """调用 DeepSeek Chat API"""
+             temperature: float = 0.7, max_tokens: int = 2048,
+             image_paths: list[str] | None = None) -> AIResponse:
+        """调用 DeepSeek Chat API
+
+        当传入 image_paths 时，将图片转为 base64 data URL 并作为 vision 输入。
+        当前模型若不支持 vision，API 会返回错误，请改用结构化数据或 vision 模型。
+        """
         if not self._initialized or self._client is None:
             self.initialize()
+
+        user_content = self._build_user_content(user_prompt, image_paths or [])
 
         try:
             response = self._client.chat.completions.create(
                 model=self._model,
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
+                    {"role": "user", "content": user_content},
                 ],
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -126,3 +138,30 @@ class DeepSeekService(BaseAIService):
                 success=False,
                 error_message=str(e),
             )
+
+    def _build_user_content(self, user_prompt: str, image_paths: list[str]):
+        """构建用户消息内容：纯文本或文本+图片列表"""
+        if not image_paths:
+            return user_prompt
+
+        content: list[dict] = [{"type": "text", "text": user_prompt}]
+        for path in image_paths:
+            data_url = self._image_to_data_url(path)
+            if data_url:
+                content.append({"type": "image_url", "image_url": {"url": data_url}})
+        return content
+
+    @staticmethod
+    def _image_to_data_url(path: str) -> str | None:
+        """将本地图片文件转为 base64 data URL"""
+        try:
+            file_path = Path(path)
+            if not file_path.exists():
+                return None
+            mime, _ = mimetypes.guess_type(str(file_path))
+            mime = mime or "image/png"
+            with file_path.open("rb") as f:
+                encoded = base64.b64encode(f.read()).decode("utf-8")
+            return f"data:{mime};base64,{encoded}"
+        except Exception:
+            return None

@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS optimization_history (
     style_name      TEXT    DEFAULT '',
     seo_keywords    TEXT    DEFAULT '[]',
     improve_reason  TEXT    DEFAULT '',
+    keyword_layout  TEXT    DEFAULT '',
     tokens_used     INTEGER DEFAULT 0,
     success         INTEGER DEFAULT 0,
     error_msg       TEXT    DEFAULT '',
@@ -119,6 +120,8 @@ class DatabaseManager:
         self._conn.execute(CREATE_OPTIMIZATION_TABLE)
         for idx_sql in CREATE_INDEXES:
             self._conn.execute(idx_sql)
+        # 迁移：为旧表增加 keyword_layout 字段
+        self._migrate_add_keyword_layout()
         self._conn.commit()
 
     def shutdown(self):
@@ -126,6 +129,16 @@ class DatabaseManager:
         if self._conn is not None:
             self._conn.close()
             self._conn = None
+
+    def _migrate_add_keyword_layout(self):
+        """为旧版 optimization_history 表增加 keyword_layout 字段"""
+        try:
+            self._conn.execute(
+                "ALTER TABLE optimization_history ADD COLUMN keyword_layout TEXT DEFAULT ''"
+            )
+        except sqlite3.OperationalError:
+            # 字段已存在
+            pass
 
     # ── 内部辅助 ────────────────────────────────────────────
 
@@ -237,9 +250,9 @@ class DatabaseManager:
         """
         sql = """INSERT INTO optimization_history
             (original_title, optimized_title, style_key, style_name,
-             seo_keywords, improve_reason, tokens_used, success,
-             error_msg, product_info, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+             seo_keywords, improve_reason, keyword_layout, tokens_used,
+             success, error_msg, product_info, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
 
         params = (
             record.get("original_title", ""),
@@ -248,6 +261,7 @@ class DatabaseManager:
             record.get("style_name", ""),
             json.dumps(record.get("seo_keywords", []), ensure_ascii=False),
             record.get("improvement_reason", ""),
+            record.get("keyword_layout", ""),
             record.get("tokens_used", 0),
             1 if record.get("success") else 0,
             record.get("error_message", ""),
@@ -425,9 +439,10 @@ class DatabaseManager:
                 "style_name": row[4],
                 "seo_keywords": json.loads(row[5]) if row[5] else [],
                 "improvement_reason": row[6],
-                "tokens_used": row[7],
-                "success": bool(row[8]),
-                "error_message": row[9],
-                "product_info": json.loads(row[10]) if row[10] else {},
-                "created_at": row[11],
+                "keyword_layout": row[7],
+                "tokens_used": row[8],
+                "success": bool(row[9]),
+                "error_message": row[10],
+                "product_info": json.loads(row[11]) if row[11] else {},
+                "created_at": row[12],
             }

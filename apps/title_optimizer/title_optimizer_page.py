@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QGroupBox, QGridLayout, QSizePolicy, QAbstractItemView,
     QMessageBox, QProgressBar, QComboBox, QCheckBox,
     QLineEdit, QRadioButton, QButtonGroup, QTextBrowser,
+    QFileDialog, QListWidget, QListWidgetItem,
 )
 from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QFont, QColor
@@ -78,10 +79,16 @@ class TitleOptimizerPage(BasePage):
         self._status_label: QLabel | None = None
         self._history_table: QTableWidget | None = None
 
+        # 平台市场数据
+        self._image_paths: list[str] = []
+        self._image_list: QListWidget | None = None
+        self._market_table: QTableWidget | None = None
+
         # 右侧结果
         self._original_title_label: QLabel | None = None
         self._optimized_title_label: QLabel | None = None
         self._keywords_label: QLabel | None = None
+        self._keyword_layout_label: QLabel | None = None
         self._reason_browser: QTextBrowser | None = None
         self._tokens_label: QLabel | None = None
         self._error_label: QLabel | None = None
@@ -167,6 +174,10 @@ class TitleOptimizerPage(BasePage):
 
         layout.addWidget(info_group)
 
+        # -- 平台市场数据（截图 + 搜索词榜单） --
+        market_group = self._create_market_data_group()
+        layout.addWidget(market_group)
+
         # -- 优化风格 --
         style_group = QGroupBox("优化风格")
         style_layout = QVBoxLayout(style_group)
@@ -251,6 +262,64 @@ class TitleOptimizerPage(BasePage):
 
         return panel
 
+    def _create_market_data_group(self) -> QGroupBox:
+        """创建平台市场数据输入区：截图上传 + 搜索词榜单表格"""
+        group = QGroupBox("平台市场数据（可选，用于数据驱动优化）")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(10)
+
+        # 图片上传区
+        img_label = QLabel("平台数据截图：")
+        layout.addWidget(img_label)
+
+        self._image_list = QListWidget()
+        self._image_list.setMaximumHeight(80)
+        self._image_list.setToolTip("已上传的数据截图，AI 会结合图片与表格数据优化")
+        layout.addWidget(self._image_list)
+
+        img_btn_layout = QHBoxLayout()
+        upload_btn = QPushButton("上传截图")
+        upload_btn.setToolTip("支持 JPG / PNG 格式的平台数据截图")
+        upload_btn.clicked.connect(self._on_upload_image)
+        clear_img_btn = QPushButton("清除图片")
+        clear_img_btn.clicked.connect(self._on_clear_images)
+        img_btn_layout.addWidget(upload_btn)
+        img_btn_layout.addWidget(clear_img_btn)
+        img_btn_layout.addStretch()
+        layout.addLayout(img_btn_layout)
+
+        # 搜索词榜单表格
+        table_label = QLabel("搜索词榜单数据：")
+        layout.addWidget(table_label)
+
+        self._market_table = QTableWidget(0, 8)
+        self._market_table.setHorizontalHeaderLabels([
+            "榜单类型", "搜索词", "搜索人气", "趋势词",
+            "搜索增速", "核心词", "搜索增量", "修饰词",
+        ])
+        self._market_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._market_table.setAlternatingRowColors(True)
+        self._market_table.verticalHeader().setVisible(False)
+        header = self._market_table.horizontalHeader()
+        for i in range(8):
+            header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self._market_table)
+
+        table_btn_layout = QHBoxLayout()
+        add_row_btn = QPushButton("添加行")
+        add_row_btn.clicked.connect(self._on_add_market_row)
+        del_row_btn = QPushButton("删除选中行")
+        del_row_btn.clicked.connect(self._on_delete_market_row)
+        clear_table_btn = QPushButton("清空数据")
+        clear_table_btn.clicked.connect(self._on_clear_market_data)
+        table_btn_layout.addWidget(add_row_btn)
+        table_btn_layout.addWidget(del_row_btn)
+        table_btn_layout.addWidget(clear_table_btn)
+        table_btn_layout.addStretch()
+        layout.addLayout(table_btn_layout)
+
+        return group
+
     # ===================== 右侧面板 =====================
 
     def _create_right_panel(self) -> QWidget:
@@ -321,6 +390,15 @@ class TitleOptimizerPage(BasePage):
         self._keywords_label.setStyleSheet("font-size: 10pt; color: #4a47a3;")
         kw_layout.addWidget(self._keywords_label)
         rc_layout.addWidget(kw_group)
+
+        # 关键词布局
+        layout_group = QGroupBox("关键词布局")
+        layout_layout = QVBoxLayout(layout_group)
+        self._keyword_layout_label = QLabel("-")
+        self._keyword_layout_label.setWordWrap(True)
+        self._keyword_layout_label.setStyleSheet("font-size: 10pt; color: #2c3e50;")
+        layout_layout.addWidget(self._keyword_layout_label)
+        rc_layout.addWidget(layout_group)
 
         # 优化理由
         reason_group = QGroupBox("优化理由")
@@ -428,6 +506,70 @@ class TitleOptimizerPage(BasePage):
         # 切换到本页面
         self._context.signals.navigate_to.emit(self.page_key)
 
+    # -------------------- 平台市场数据操作 --------------------
+
+    def _on_upload_image(self):
+        """上传平台数据截图"""
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "选择平台数据截图",
+            "",
+            "图片文件 (*.png *.jpg *.jpeg *.bmp *.webp)",
+        )
+        if paths:
+            for path in paths:
+                if path not in self._image_paths:
+                    self._image_paths.append(path)
+                    item = QListWidgetItem(path)
+                    item.setToolTip(path)
+                    self._image_list.addItem(item)
+
+    def _on_clear_images(self):
+        """清除所有上传的截图"""
+        self._image_paths.clear()
+        self._image_list.clear()
+
+    def _on_add_market_row(self):
+        """在搜索词榜单表格末尾添加空行"""
+        row = self._market_table.rowCount()
+        self._market_table.insertRow(row)
+        for col in range(8):
+            self._market_table.setItem(row, col, QTableWidgetItem(""))
+
+    def _on_delete_market_row(self):
+        """删除搜索词榜单表格中选中的行"""
+        rows = sorted({idx.row() for idx in self._market_table.selectedIndexes()}, reverse=True)
+        for row in rows:
+            self._market_table.removeRow(row)
+
+    def _on_clear_market_data(self):
+        """清空搜索词榜单表格"""
+        self._market_table.setRowCount(0)
+
+    def _get_market_data(self) -> list[dict]:
+        """从表格读取搜索词榜单数据"""
+        data = []
+        keys = [
+            "rank_type", "search_term", "search_popularity", "trend_word",
+            "search_growth", "core_word", "search_increment", "modifier_word",
+        ]
+        for row in range(self._market_table.rowCount()):
+            row_data = {}
+            has_value = False
+            for col, key in enumerate(keys):
+                item = self._market_table.item(row, col)
+                value = item.text().strip() if item else ""
+                row_data[key] = value
+                if value:
+                    has_value = True
+            if has_value:
+                data.append(row_data)
+        return data
+
+    def _get_image_paths(self) -> list[str]:
+        """获取已上传的截图路径"""
+        return list(self._image_paths)
+
     # ===================== 优化流程 =====================
 
     def _get_product_info(self) -> dict | None:
@@ -461,12 +603,15 @@ class TitleOptimizerPage(BasePage):
             self._worker = None
 
         product_info = self._get_product_info()
+        market_data = self._get_market_data()
+        image_paths = self._get_image_paths()
 
         if self._batch_check and self._batch_check.isChecked():
             # 批量全风格优化
             style_keys = [s.key for s in OPTIMIZE_STYLES]
             self._worker = BatchOptimizeWorker(
-                self._optimizer, title, style_keys, product_info
+                self._optimizer, title, style_keys, product_info,
+                market_data=market_data, image_paths=image_paths,
             )
             self._worker.progress_signal.connect(self._on_batch_progress)
             self._worker.result_signal.connect(self._on_single_result)
@@ -480,7 +625,8 @@ class TitleOptimizerPage(BasePage):
             # 单风格优化
             style_key = self._get_selected_style() or "seo"
             self._worker = OptimizeWorker(
-                self._optimizer, title, style_key, product_info
+                self._optimizer, title, style_key, product_info,
+                market_data=market_data, image_paths=image_paths,
             )
             self._worker.finished_signal.connect(self._on_single_finished)
             self._worker.error_signal.connect(self._on_worker_error)
@@ -564,9 +710,12 @@ class TitleOptimizerPage(BasePage):
 
         style_key = self._get_selected_style() or "seo"
         product_info = self._get_product_info()
+        market_data = self._get_market_data()
+        image_paths = self._get_image_paths()
 
         self._worker = MultiTitleOptimizeWorker(
-            self._optimizer, titles, style_key, product_info
+            self._optimizer, titles, style_key, product_info,
+            market_data=market_data, image_paths=image_paths,
         )
         self._worker.progress.connect(self._on_multi_progress)
         self._worker.item_finished.connect(self._on_multi_item)
@@ -592,6 +741,7 @@ class TitleOptimizerPage(BasePage):
                 "style_name": result.style_name,
                 "seo_keywords": result.seo_keywords,
                 "improvement_reason": result.improvement_reason,
+                "keyword_layout": result.keyword_layout,
                 "tokens_used": result.tokens_used,
                 "success": result.success,
                 "error_message": result.error_message,
@@ -666,6 +816,11 @@ class TitleOptimizerPage(BasePage):
         else:
             self._keywords_label.setText("未提取到关键词")
 
+        if result.keyword_layout:
+            self._keyword_layout_label.setText(result.keyword_layout)
+        else:
+            self._keyword_layout_label.setText("-")
+
         self._reason_browser.setPlainText(result.improvement_reason or "无")
         self._tokens_label.setText(f"风格: {result.style_name} | Token 用量: {result.tokens_used}")
 
@@ -695,6 +850,7 @@ class TitleOptimizerPage(BasePage):
                     style_name=record.get("style_name", ""),
                     seo_keywords=record.get("seo_keywords", []),
                     improvement_reason=record.get("improvement_reason", ""),
+                    keyword_layout=record.get("keyword_layout", ""),
                     tokens_used=record.get("tokens_used", 0),
                     success=record.get("success", True),
                     error_message=record.get("error_message", ""),
@@ -725,6 +881,7 @@ class TitleOptimizerPage(BasePage):
                 "style_name": result.style_name,
                 "seo_keywords": result.seo_keywords,
                 "improvement_reason": result.improvement_reason,
+                "keyword_layout": result.keyword_layout,
                 "tokens_used": result.tokens_used,
                 "success": result.success,
                 "error_message": result.error_message,

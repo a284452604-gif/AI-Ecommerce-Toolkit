@@ -300,7 +300,7 @@ class DataExportPage(BasePage):
 
     def _show_optimization_preview(self, data: list[dict]):
         """预览优化记录"""
-        columns = ["时间", "风格", "原标题", "优化标题", "Token"]
+        columns = ["时间", "风格", "原标题", "优化标题", "关键词布局", "Token"]
         self._preview_table.setColumnCount(len(columns))
         self._preview_table.setHorizontalHeaderLabels(columns)
         self._preview_table.setRowCount(len(data))
@@ -310,14 +310,16 @@ class DataExportPage(BasePage):
             self._preview_table.setItem(row, 1, QTableWidgetItem(record.get("style_name", "")))
             self._preview_table.setItem(row, 2, QTableWidgetItem(record.get("original_title", "")))
             self._preview_table.setItem(row, 3, QTableWidgetItem(record.get("optimized_title", "")))
-            self._preview_table.setItem(row, 4, QTableWidgetItem(str(record.get("tokens_used", 0))))
+            self._preview_table.setItem(row, 4, QTableWidgetItem(record.get("keyword_layout", "")))
+            self._preview_table.setItem(row, 5, QTableWidgetItem(str(record.get("tokens_used", 0))))
 
         header = self._preview_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
 
     def _on_export(self):
         """执行导出"""
@@ -411,7 +413,7 @@ class DataExportPage(BasePage):
 
             widths = [20, 10, 20, 50, 12, 20, 40, 10, 50]
         else:
-            headers = ["时间", "风格", "原标题", "优化标题", "SEO关键词", "优化理由", "Token"]
+            headers = ["时间", "风格", "原标题", "优化标题", "SEO关键词", "优化理由", "关键词布局", "Token"]
             ws.append(headers)
             for cell in ws[1]:
                 cell.font = header_font_white
@@ -429,10 +431,11 @@ class DataExportPage(BasePage):
                     record.get("optimized_title", ""),
                     kw_str,
                     record.get("improvement_reason", ""),
+                    record.get("keyword_layout", ""),
                     record.get("tokens_used", 0),
                 ])
 
-            widths = [20, 12, 50, 50, 30, 40, 10]
+            widths = [20, 12, 50, 50, 30, 40, 30, 10]
 
         # 设置列宽
         for i, w in enumerate(widths, 1):
@@ -465,7 +468,7 @@ class DataExportPage(BasePage):
                     ])
             else:
                 writer = csv.writer(f)
-                writer.writerow(["时间", "风格", "原标题", "优化标题", "SEO关键词", "优化理由", "Token"])
+                writer.writerow(["时间", "风格", "原标题", "优化标题", "SEO关键词", "优化理由", "关键词布局", "Token"])
                 for record in self._preview_data:
                     keywords = record.get("seo_keywords", [])
                     kw_str = ", ".join(keywords) if keywords else ""
@@ -476,5 +479,6 @@ class DataExportPage(BasePage):
                         record.get("optimized_title", ""),
                         kw_str,
                         record.get("improvement_reason", ""),
+                        record.get("keyword_layout", ""),
                         record.get("tokens_used", 0),
                     ])

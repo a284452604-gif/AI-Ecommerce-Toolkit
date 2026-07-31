@@ -51,6 +51,19 @@ OPTIMIZE_STYLES = [
         temperature=0.8,
         max_tokens=800,
     ),
+    OptimizeStyle(
+        key="data_driven",
+        name="数据驱动优化",
+        description="结合平台搜索词榜单数据与截图，优化关键词布局",
+        system_prompt="你是一位数据驱动的电商 SEO 专家。"
+                      "你会结合平台后台的搜索词榜单数据（搜索人气、搜索增速、搜索增量等）"
+                      "以及用户上传的平台数据截图，为商品标题给出关键词布局建议。"
+                      "优先使用高搜索人气、高增速、高增量的搜索词；"
+                      "合理搭配核心词、趋势词、修饰词；避免关键词堆砌和违禁词。"
+                      "标题长度控制在30-60字，核心关键词尽量前置。",
+        temperature=0.5,
+        max_tokens=1200,
+    ),
 ]
 
 
@@ -65,6 +78,7 @@ class OptimizeResult:
     style_name: str               # 优化风格显示名
     seo_keywords: list[str] = field(default_factory=list)
     improvement_reason: str = ""  # 优化理由
+    keyword_layout: str = ""      # 数据驱动优化中的关键词布局建议
     tokens_used: int = 0
     success: bool = True
     error_message: str = ""
@@ -102,13 +116,19 @@ class TitleOptimizer:
         return self._styles.get(key)
 
     def optimize(self, original_title: str, style_key: str = "seo",
-                 product_info: dict | None = None) -> OptimizeResult:
+                 product_info: dict | None = None,
+                 market_data: list[dict] | None = None,
+                 image_paths: list[str] | None = None) -> OptimizeResult:
         """优化商品标题
 
         Args:
             original_title: 原标题
-            style_key: 优化风格 (seo / promotion / brand)
+            style_key: 优化风格 (seo / promotion / brand / data_driven)
             product_info: 可选的商品信息字典，如 {"category": "手机配件", "price": "29.9"}
+            market_data: 平台搜索词榜单数据行列表，每行包含
+                rank_type, search_term, search_popularity, trend_word,
+                search_growth, core_word, search_increment, modifier_word
+            image_paths: 本地平台数据截图路径列表（需要模型支持 vision）
 
         Returns:
             OptimizeResult: 优化结果
@@ -124,13 +144,16 @@ class TitleOptimizer:
                 error_message=f"未知的优化风格: {style_key}",
             )
 
-        user_prompt = self._build_user_prompt(original_title, product_info)
+        user_prompt = self._build_user_prompt(
+            original_title, product_info, market_data
+        )
 
         response: AIResponse = self._ai.chat(
             system_prompt=style.system_prompt,
             user_prompt=user_prompt,
             temperature=style.temperature,
             max_tokens=style.max_tokens,
+            image_paths=image_paths,
         )
 
         if not response.success:
@@ -151,11 +174,13 @@ class TitleOptimizer:
             style_name=style.name,
             seo_keywords=parsed["keywords"],
             improvement_reason=parsed["reason"],
+            keyword_layout=parsed.get("keyword_layout", ""),
             tokens_used=response.tokens_total,
             success=True,
         )
 
-    def _build_user_prompt(self, title: str, product_info: dict | None) -> str:
+    def _build_user_prompt(self, title: str, product_info: dict | None,
+                           market_data: list[dict] | None) -> str:
         """构建用户 prompt"""
         lines = [f"原标题：{title}"]
         if product_info:
@@ -168,16 +193,39 @@ class TitleOptimizer:
             if product_info.get("shop"):
                 lines.append(f"店铺：{product_info['shop']}")
 
+        # 平台搜索词榜单数据
+        if market_data:
+            lines.append("")
+            lines.append("平台搜索词榜单数据：")
+            lines.append(
+                "榜单类型 | 搜索词 | 搜索人气 | 趋势词 | 搜索增速 | 核心词 | 搜索增量 | 修饰词"
+            )
+            for row in market_data:
+                if not isinstance(row, dict):
+                    continue
+                cells = [
+                    str(row.get("rank_type", "")),
+                    str(row.get("search_term", "")),
+                    str(row.get("search_popularity", "")),
+                    str(row.get("trend_word", "")),
+                    str(row.get("search_growth", "")),
+                    str(row.get("core_word", "")),
+                    str(row.get("search_increment", "")),
+                    str(row.get("modifier_word", "")),
+                ]
+                lines.append(" | ".join(cells))
+
         lines.append("")
         lines.append("请按以下格式输出（不要输出任何其他内容）：")
         lines.append("优化标题：<优化后的标题>")
         lines.append("SEO关键词：<关键词1>, <关键词2>, <关键词3>")
+        lines.append("关键词布局：<核心词>+<修饰词>+<属性词>/<趋势词>（用'+'连接，简明展示布局）")
         lines.append("优化理由：<简要说明优化思路，2-3句话>")
         return "\n".join(lines)
 
     def _parse_response(self, content: str) -> dict:
         """解析 AI 返回的结构化内容"""
-        result = {"title": content, "keywords": [], "reason": ""}
+        result = {"title": content, "keywords": [], "reason": "", "keyword_layout": ""}
 
         lines = content.split("\n")
         for line in lines:
@@ -187,6 +235,8 @@ class TitleOptimizer:
             elif line.startswith("SEO关键词：") or line.startswith("SEO关键词:"):
                 kw_str = line.split("：", 1)[-1].split(":", 1)[-1].strip()
                 result["keywords"] = [k.strip() for k in kw_str.split(",") if k.strip()]
+            elif line.startswith("关键词布局：") or line.startswith("关键词布局:"):
+                result["keyword_layout"] = line.split("：", 1)[-1].split(":", 1)[-1].strip()
             elif line.startswith("优化理由：") or line.startswith("优化理由:"):
                 result["reason"] = line.split("：", 1)[-1].split(":", 1)[-1].strip()
 
