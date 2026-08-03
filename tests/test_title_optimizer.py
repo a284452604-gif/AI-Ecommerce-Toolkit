@@ -6,6 +6,9 @@ from unittest.mock import MagicMock
 from apps.title_optimizer.title_optimizer import (
     TitleOptimizer, OptimizeStyle, OPTIMIZE_STYLES,
 )
+from apps.title_optimizer.market_data_extractor import (
+    extract_market_rows, MARKET_KEYS,
+)
 from framework.ai_service import AIResponse
 
 
@@ -43,6 +46,25 @@ class FakeVisionAIService(FakeAIService):
     """模拟支持 vision 的 AI 服务"""
 
     supports_vision = True
+
+
+class FakeJsonAIService(FakeAIService):
+    """模拟返回结构化 JSON 数组的 AI 服务（用于提取测试）"""
+
+    def chat(self, system_prompt: str, user_prompt: str,
+             temperature: float = 0.7, max_tokens: int = 2048,
+             image_paths: list[str] | None = None) -> AIResponse:
+        content = (
+            '[{"rank_type": "飙升榜", "search_term": "连衣裙", '
+            '"search_popularity": "1000+", "trend_word": "碎花", '
+            '"search_growth": "120%", "core_word": "连衣裙", '
+            '"search_increment": "500+", "modifier_word": "夏季"},'
+            '{"rank_type": "热搜榜", "search_term": "T恤", '
+            '"search_popularity": "5000+", "trend_word": "纯棉", '
+            '"search_growth": "30%", "core_word": "T恤", '
+            '"search_increment": "1000+", "modifier_word": "男"}]'
+        )
+        return AIResponse(content=content, success=True, tokens_total=50)
 
 
 @pytest.fixture
@@ -136,3 +158,40 @@ def test_vision_model_receives_images():
     )
     assert result.success
     assert opt._ai.last_image_paths == ["screenshot.png"]
+
+
+def test_optimize_requires_platform_data():
+    """缺少平台数据时优化必须失败（禁止凭经验编造）"""
+    opt = TitleOptimizer(FakeAIService())
+    # 既不传 market_data 也不传 image_paths
+    result = opt.optimize("原标题", style_key="seo")
+    assert not result.success
+    assert "平台数据" in result.error_message
+
+
+def test_all_styles_require_platform_data():
+    """四种风格在缺少平台数据时都应失败"""
+    for style in OPTIMIZE_STYLES:
+        opt = TitleOptimizer(FakeAIService())
+        result = opt.optimize("原标题", style_key=style.key)
+        assert not result.success, f"风格 {style.key} 不应在无数据时成功"
+
+
+def test_extract_market_rows_parses_json():
+    """market_data_extractor 能从模型返回的 JSON 解析出 8 列数据"""
+    service = FakeJsonAIService()
+    # 直接传入 OCR 文字，避免依赖 OCR 引擎与真实图片
+    rows, error = extract_market_rows(service, ocr_text="飙升榜 连衣裙 ...")
+    assert error == ""
+    assert len(rows) == 2
+    assert set(rows[0].keys()) == set(MARKET_KEYS)
+    assert rows[0]["search_term"] == "连衣裙"
+    assert rows[1]["modifier_word"] == "男"
+
+
+def test_extract_market_rows_no_input():
+    """无截图无文字时返回错误"""
+    service = FakeAIService()
+    rows, error = extract_market_rows(service)
+    assert rows == []
+    assert error

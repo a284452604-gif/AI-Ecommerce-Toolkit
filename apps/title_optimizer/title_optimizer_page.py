@@ -1,11 +1,16 @@
 """AI 标题优化页面：输入商品标题，由 AI 生成优化建议
 
+设计原则（V1.2.3 起）：
+    所有优化风格都必须基于用户提供的「平台搜索词榜单数据 / 平台数据截图」，
+    AI 只能使用其中的真实关键词，严禁凭经验编造通用词。
+
 支持:
     1. 手动输入标题 + 商品信息（类目、价格）
     2. 从 V0.2 商品分析页面跳转（通过 SignalBus 接收原标题）
-    3. 三种优化风格：搜索优化、促销转化、品牌调性
-    4. 单风格优化 + 批量全风格优化
-    5. 结果对比展示 + 优化历史
+    3. 上传平台数据截图 -> 一键 OCR 识别并整理为 8 列搜索词榜单
+    4. 四种优化风格：搜索优化、促销转化、品牌调性、数据驱动优化
+    5. 单风格优化 + 批量全风格优化 + 多标题批量优化
+    6. 结果对比展示 + 优化历史
 """
 
 from __future__ import annotations
@@ -31,8 +36,11 @@ from database.db_manager import DatabaseManager
 from apps.title_optimizer.title_optimizer import (
     TitleOptimizer, OptimizeResult, OPTIMIZE_STYLES,
 )
-from apps.title_optimizer.optimize_worker import OptimizeWorker, BatchOptimizeWorker
+from apps.title_optimizer.optimize_worker import (
+    OptimizeWorker, BatchOptimizeWorker, MarketExtractWorker,
+)
 from apps.title_optimizer.multi_title_worker import MultiTitleOptimizeWorker
+from apps.title_optimizer.market_data_extractor import MARKET_KEYS
 
 
 class TitleOptimizerPage(BasePage):
@@ -65,6 +73,7 @@ class TitleOptimizerPage(BasePage):
         # 状态
         self._history: list[OptimizeResult] = []
         self._worker: OptimizeWorker | BatchOptimizeWorker | MultiTitleOptimizeWorker | None = None
+        self._extract_worker: MarketExtractWorker | None = None
         self._multi_results: list[OptimizeResult] = []
 
         # UI 引用
@@ -264,9 +273,15 @@ class TitleOptimizerPage(BasePage):
 
     def _create_market_data_group(self) -> QGroupBox:
         """创建平台市场数据输入区：截图上传 + 搜索词榜单表格"""
-        group = QGroupBox("平台市场数据（可选，用于数据驱动优化）")
+        group = QGroupBox("平台市场数据（必填，所有优化均基于此）")
         layout = QVBoxLayout(group)
         layout.setSpacing(10)
+
+        hint = QLabel("所有优化都必须基于平台真实数据：上传截图并点击「识别截图并填充表格」"
+                      "自动提取，或直接在下方表格手动填写。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #b8860b; font-size: 9pt;")
+        layout.addWidget(hint)
 
         # 图片上传区
         img_label = QLabel("平台数据截图：")
@@ -274,7 +289,7 @@ class TitleOptimizerPage(BasePage):
 
         self._image_list = QListWidget()
         self._image_list.setMaximumHeight(80)
-        self._image_list.setToolTip("已上传的数据截图，AI 会结合图片与表格数据优化")
+        self._image_list.setToolTip("已上传的数据截图，可用于 OCR 提取或供 vision 模型直接看图")
         layout.addWidget(self._image_list)
 
         img_btn_layout = QHBoxLayout()
@@ -283,8 +298,13 @@ class TitleOptimizerPage(BasePage):
         upload_btn.clicked.connect(self._on_upload_image)
         clear_img_btn = QPushButton("清除图片")
         clear_img_btn.clicked.connect(self._on_clear_images)
+        extract_btn = QPushButton("识别截图并填充表格")
+        extract_btn.setObjectName("PrimaryButton")
+        extract_btn.setToolTip("OCR 识别截图文字，并由 AI 整理为下方 8 列搜索词榜单")
+        extract_btn.clicked.connect(self._on_extract_market_data)
         img_btn_layout.addWidget(upload_btn)
         img_btn_layout.addWidget(clear_img_btn)
+        img_btn_layout.addWidget(extract_btn)
         img_btn_layout.addStretch()
         layout.addLayout(img_btn_layout)
 
@@ -529,6 +549,62 @@ class TitleOptimizerPage(BasePage):
         self._image_paths.clear()
         self._image_list.clear()
 
+    def _on_extract_market_data(self):
+        """OCR 识别截图并整理为搜索词榜单表格（异步）"""
+        if not self._ai_available:
+            QMessageBox.warning(self, "提示",
+                "AI 服务未就绪，无法整理数据。\n请在「系统设置」中配置 DeepSeek API Key。")
+            return
+        if not self._image_paths:
+            QMessageBox.warning(self, "提示",
+                "请先上传平台数据截图，再点击「识别截图并填充表格」。")
+            return
+        if self._extract_worker and self._extract_worker.isRunning():
+            return
+
+        self._set_ui_enabled(False)
+        self._status_label.setText("正在识别截图并整理数据...")
+        if self._progress:
+            self._progress.setVisible(True)
+            self._progress.setRange(0, 0)
+
+        self._extract_worker = MarketExtractWorker(
+            self._optimizer._ai, image_paths=list(self._image_paths)
+        )
+        self._extract_worker.extracted_signal.connect(self._on_market_extracted)
+        self._extract_worker.error_signal.connect(self._on_extract_error)
+        self._extract_worker.start()
+
+    def _on_market_extracted(self, rows: list[dict], error_message: str):
+        self._set_ui_enabled(True)
+        if self._progress:
+            self._progress.setVisible(False)
+        if error_message:
+            QMessageBox.warning(self, "识别失败", error_message)
+            self._status_label.setText("就绪")
+            return
+        self._fill_market_table(rows)
+        self._status_label.setText(
+            f"已从截图提取 {len(rows)} 条搜索词数据，请核对后点击「开始优化」"
+        )
+
+    def _on_extract_error(self, error_msg: str):
+        self._set_ui_enabled(True)
+        if self._progress:
+            self._progress.setVisible(False)
+        self._status_label.setText("识别出错")
+        QMessageBox.warning(self, "识别出错", error_msg)
+
+    def _fill_market_table(self, rows: list[dict]):
+        """用提取结果覆盖填写搜索词榜单表格"""
+        self._market_table.setRowCount(0)
+        for row_data in rows:
+            row = self._market_table.rowCount()
+            self._market_table.insertRow(row)
+            for col, key in enumerate(MARKET_KEYS):
+                value = row_data.get(key, "")
+                self._market_table.setItem(row, col, QTableWidgetItem(str(value)))
+
     def _on_add_market_row(self):
         """在搜索词榜单表格末尾添加空行"""
         row = self._market_table.rowCount()
@@ -605,6 +681,22 @@ class TitleOptimizerPage(BasePage):
         product_info = self._get_product_info()
         market_data = self._get_market_data()
         image_paths = self._get_image_paths()
+
+        # 强制要求平台数据：所有优化风格都必须基于平台真实数据
+        if not market_data and not image_paths:
+            QMessageBox.warning(
+                self, "缺少平台数据",
+                "所有优化都必须基于平台真实数据，不能仅凭原标题凭空生成。\n\n"
+                "请先：\n"
+                "  1) 上传平台数据截图，点击「识别截图并填充表格」；或\n"
+                "  2) 在下方表格手动填写搜索词榜单数据。\n\n"
+                "然后再点击「开始优化」。",
+            )
+            self._set_ui_enabled(True)
+            if self._progress:
+                self._progress.setVisible(False)
+            self._status_label.setText("就绪")
+            return
 
         if self._batch_check and self._batch_check.isChecked():
             # 批量全风格优化
@@ -712,6 +804,22 @@ class TitleOptimizerPage(BasePage):
         product_info = self._get_product_info()
         market_data = self._get_market_data()
         image_paths = self._get_image_paths()
+
+        # 强制要求平台数据：多标题批量优化同样必须基于平台真实数据
+        if not market_data and not image_paths:
+            QMessageBox.warning(
+                self, "缺少平台数据",
+                "所有优化都必须基于平台真实数据，不能仅凭原标题凭空生成。\n\n"
+                "请先：\n"
+                "  1) 上传平台数据截图，点击「识别截图并填充表格」；或\n"
+                "  2) 在下方表格手动填写搜索词榜单数据。\n\n"
+                "然后再点击「开始优化」。",
+            )
+            self._set_ui_enabled(True)
+            if self._progress:
+                self._progress.setVisible(False)
+            self._status_label.setText("就绪")
+            return
 
         self._worker = MultiTitleOptimizeWorker(
             self._optimizer, titles, style_key, product_info,

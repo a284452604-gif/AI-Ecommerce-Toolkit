@@ -2,6 +2,7 @@
 
 from PySide6.QtCore import QThread, Signal
 from apps.title_optimizer.title_optimizer import TitleOptimizer, OptimizeResult
+from apps.title_optimizer.market_data_extractor import extract_market_rows
 
 
 class OptimizeWorker(QThread):
@@ -81,5 +82,30 @@ class BatchOptimizeWorker(QThread):
                 self.result_signal.emit(result)
                 results.append(result)
             self.finished_signal.emit(results)
+        except Exception as e:
+            self.error_signal.emit(str(e))
+
+
+class MarketExtractWorker(QThread):
+    """后台从平台数据截图 / OCR 文字提取结构化搜索词榜单数据"""
+
+    extracted_signal = Signal(list, str)   # rows: list[dict], error_message: str
+    error_signal = Signal(str)
+
+    def __init__(self, ai_service, image_paths: list[str] | None = None,
+                 ocr_text: str | None = None):
+        super().__init__()
+        self._ai_service = ai_service
+        self._image_paths = image_paths
+        self._ocr_text = ocr_text
+
+    def run(self):
+        try:
+            rows, error_msg = extract_market_rows(
+                self._ai_service,
+                image_paths=self._image_paths,
+                ocr_text=self._ocr_text,
+            )
+            self.extracted_signal.emit(rows, error_msg)
         except Exception as e:
             self.error_signal.emit(str(e))
