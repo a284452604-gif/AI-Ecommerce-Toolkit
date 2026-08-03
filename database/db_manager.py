@@ -62,6 +62,20 @@ CREATE_INDEXES = [
 ]
 
 
+def _safe_json_loads(value, default):
+    """安全解析 JSON 字段，解析失败时返回默认值。
+
+    避免单条历史记录中的脏数据（如列顺序错位写入的文本）导致
+    整个历史列表加载抛异常。
+    """
+    if value is None or value == "":
+        return default
+    try:
+        return json.loads(value)
+    except (ValueError, TypeError):
+        return default
+
+
 class DatabaseManager:
     """SQLite 数据库管理器（线程安全单例）
 
@@ -112,6 +126,8 @@ class DatabaseManager:
 
         self._db_path = os.path.join(data_dir, "toolkit.db")
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        # 使用 Row 工厂，使行可按列名访问，避免因表结构迁移导致列顺序错位
+        self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
 
@@ -413,36 +429,36 @@ class DatabaseManager:
 
     # ── 工具方法 ────────────────────────────────────────────
 
-    def _row_to_dict(self, row: tuple, table: str) -> dict:
-        """将数据库行转换为字典"""
+    def _row_to_dict(self, row, table: str) -> dict:
+        """将数据库行转换为字典（按列名访问，避免迁移后列顺序错位）"""
         if table == "analysis":
             return {
-                "id": row[0],
-                "url": row[1],
-                "platform": row[2],
-                "product_id": row[3],
-                "title": row[4],
-                "price": row[5],
-                "shop_name": row[6],
-                "description": row[7],
-                "fetch_time": row[8],
-                "success": bool(row[9]),
-                "error_message": row[10],
-                "created_at": row[11],
+                "id": row["id"],
+                "url": row["url"],
+                "platform": row["platform"],
+                "product_id": row["product_id"],
+                "title": row["title"],
+                "price": row["price"],
+                "shop_name": row["shop_name"],
+                "description": row["description"],
+                "fetch_time": row["fetch_time"],
+                "success": bool(row["success"]),
+                "error_message": row["error_msg"],
+                "created_at": row["created_at"],
             }
         else:  # optimization
             return {
-                "id": row[0],
-                "original_title": row[1],
-                "optimized_title": row[2],
-                "style_key": row[3],
-                "style_name": row[4],
-                "seo_keywords": json.loads(row[5]) if row[5] else [],
-                "improvement_reason": row[6],
-                "keyword_layout": row[7],
-                "tokens_used": row[8],
-                "success": bool(row[9]),
-                "error_message": row[10],
-                "product_info": json.loads(row[11]) if row[11] else {},
-                "created_at": row[12],
+                "id": row["id"],
+                "original_title": row["original_title"],
+                "optimized_title": row["optimized_title"],
+                "style_key": row["style_key"],
+                "style_name": row["style_name"],
+                "seo_keywords": _safe_json_loads(row["seo_keywords"], []),
+                "improvement_reason": row["improve_reason"],
+                "keyword_layout": row["keyword_layout"],
+                "tokens_used": row["tokens_used"],
+                "success": bool(row["success"]),
+                "error_message": row["error_msg"],
+                "product_info": _safe_json_loads(row["product_info"], {}),
+                "created_at": row["created_at"],
             }

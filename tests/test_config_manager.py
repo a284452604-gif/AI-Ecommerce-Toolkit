@@ -20,7 +20,7 @@ class TestConfigManager:
         config = ConfigManager(temp_app_dir)
 
         assert config.get("app.name") == "AI电商工具箱"
-        assert config.get("app.version") == "1.2.1"
+        assert config.get("app.version") == "1.2.2"
         assert config.get("window.width") == 1200
         assert config.get("window.height") == 800
 

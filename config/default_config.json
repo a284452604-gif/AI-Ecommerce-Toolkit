@@ -1,7 +1,7 @@
 {
     "app": {
         "name": "AI电商工具箱",
-        "version": "1.2.1"
+        "version": "1.2.2"
     },
     "window": {
         "width": 1200,

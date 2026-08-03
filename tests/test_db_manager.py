@@ -157,3 +157,95 @@ class TestDatabaseManager:
         # 按平台筛选导出
         data = db.export_analysis_to_list(platform="京东")
         assert len(data) == 1
+
+    def test_migrated_db_column_order(self, tmp_path):
+        """回归测试：旧库经 ALTER 追加 keyword_layout 后列顺序变化，解析不应错位。
+
+        复现 V1.2.1 线上 bug：旧版 optimization_history 表没有 keyword_layout，
+        迁移时 ALTER TABLE 将其追加到末尾（index 12），而 _row_to_dict 按位置
+        读取会错位，导致 product_info 指向 created_at 日期串并 json.loads 失败。
+        """
+        import sqlite3
+
+        # 用独立路径，避免与 autouse fixture 的临时库冲突
+        # 注意：DatabaseManager 把库放在 app_dir/data/toolkit.db
+        custom_dir = tmp_path / "migrated"
+        (custom_dir / "data").mkdir(parents=True)
+        cx = sqlite3.connect(str(custom_dir / "data" / "toolkit.db"))
+        # 旧版表结构（无 keyword_layout），共 12 列
+        cx.execute("""CREATE TABLE optimization_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            original_title TEXT NOT NULL,
+            optimized_title TEXT DEFAULT '',
+            style_key TEXT DEFAULT '',
+            style_name TEXT DEFAULT '',
+            seo_keywords TEXT DEFAULT '[]',
+            improve_reason TEXT DEFAULT '',
+            tokens_used INTEGER DEFAULT 0,
+            success INTEGER DEFAULT 0,
+            error_msg TEXT DEFAULT '',
+            product_info TEXT DEFAULT '{}',
+            created_at TEXT NOT NULL
+        )""")
+        cx.execute(
+            """INSERT INTO optimization_history
+               (original_title, optimized_title, style_key, style_name,
+                seo_keywords, improve_reason, tokens_used, success,
+                error_msg, product_info, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            ("原标题X", "优化标题X", "seo", "搜索优化",
+             '["关键词A","关键词B"]', "优化理由说明", 120, 1, "",
+             '{"cat":"手机"}', "2026-07-30 20:26:37"),
+        )
+        cx.commit()
+        cx.close()
+
+        # 重置单例并用同一文件初始化（触发 ALTER 追加 keyword_layout 到末尾）
+        DatabaseManager._instance = None
+        db = DatabaseManager.get_instance()
+        db.initialize(str(custom_dir))
+
+        records = db.get_optimization_history(limit=10)
+        assert len(records) == 1
+        r = records[0]
+        assert isinstance(r["seo_keywords"], list)
+        assert r["seo_keywords"] == ["关键词A", "关键词B"]
+        assert isinstance(r["product_info"], dict)
+        assert r["product_info"] == {"cat": "手机"}
+        assert r["created_at"] == "2026-07-30 20:26:37"
+        assert r["keyword_layout"] == ""  # 迁移新增列的默认值
+        assert r["improvement_reason"] == "优化理由说明"
+        assert r["tokens_used"] == 120
+        assert r["success"] is True
+        db.shutdown()
+        DatabaseManager._instance = None
+
+    def test_corrupt_json_does_not_break_load(self, setup_db):
+        """回归测试：单条记录的 JSON 字段损坏不应拖垮整个历史加载"""
+        db = setup_db
+        # 直接写入一条 seo_keywords / product_info 为非 JSON 文本的脏数据
+        db._cx.execute(
+            "INSERT INTO optimization_history "
+            "(original_title, seo_keywords, product_info, created_at) "
+            "VALUES (?,?,?,?)",
+            ("脏数据标题", "这不是合法JSON", "也不是", "2026-07-30 20:26:37"),
+        )
+        db._cx.commit()
+        # 同时写入一条正常数据
+        db.save_optimization_record({
+            "original_title": "正常标题",
+            "style_key": "seo",
+            "style_name": "搜索优化",
+            "seo_keywords": ["a"],
+            "product_info": {"k": "v"},
+            "success": True,
+        })
+        records = db.get_optimization_history(limit=10)
+        assert len(records) == 2
+        titles = {r["original_title"] for r in records}
+        assert "脏数据标题" in titles
+        assert "正常标题" in titles
+        # 脏数据降级为默认值，不抛异常
+        for r in records:
+            assert isinstance(r["seo_keywords"], list)
+            assert isinstance(r["product_info"], dict)
